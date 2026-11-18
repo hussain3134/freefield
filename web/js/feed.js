@@ -59,6 +59,12 @@ class Feed {
     this.entries.delete(id);
     this.emit();
   }
+  async retry(id) {
+    const entry = await api("/api/history/" + id + "/retry", { method: "POST" });
+    this.entries.set(entry.id, entry);
+    this.emit();
+    this.schedule();
+  }
   async cancel(id) {
     await api(`/api/history/${id}/cancel`, { method: "POST" });
     this.poll();
@@ -67,6 +73,14 @@ class Feed {
 export const feed = new Feed();
 
 export function statusText(e) {
+  if (!isDone(e) && e.pipeline) {
+    const stage = e.pipeline.stages.find((step) => step.status === "submitting");
+    if (stage) {
+      const model = byId.get(e.app)?.provider_models?.find((s) => s.kind === stage.kind)?.options
+        .find((o) => o.id === e.pipeline.selection[stage.kind + "_model"]);
+      return t("models." + stage.kind) + " · " + (model?.label || t("models.native"));
+    }
+  }
   if (e.status === "starting") return live.gpuWarm ? t("status.submitting") : t("status.starting");
   if (e.status === "queued") return e.queue ? t("status.queued.n", { n: e.queue }) : t("status.queued");
   if (e.status === "running") {
@@ -144,7 +158,10 @@ function failedCard(e) {
     el("b", {}, `${t(`status.${e.status}`)} · ${app?.name ?? e.app}`),
     el("pre", {}, e.error?.class_type ? `${e.error.class_type}${e.error.node ? ` (node ${e.error.node})` : ""}: ${e.error.message}` : (e.error?.message || "")),
     el("div", { class: "row" },
-      app ? el("button", { class: "btn small lime", type: "button", onclick: () => hooks.retry?.(item) }, icon("redo"), t("act.retry")) : null,
+      app ? el("button", { class: "btn small lime", type: "button", onclick: () => {
+        if (!e.pipeline) return hooks.retry?.(item);
+        if (window.confirm(t("models.retry"))) feed.retry(e.id).catch((err) => toast(err.message, { error: true }));
+      } }, icon("redo"), t("act.retry")) : null,
       app ? el("button", { class: "btn small ghost", type: "button", onclick: () => hooks.recreate?.(item) }, t("act.recreate")) : null,
       deleteButton(() => feed.remove(e.id), "btn small ghost danger")));
   return { node };

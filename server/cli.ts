@@ -6,6 +6,9 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { loadRegistry } from "./registry.ts";
 import { explainSubmitError, Runner, type Values } from "./runner.ts";
+import { History } from "./history.ts";
+import { selection } from "./provider-models.ts";
+import { ProviderRuns } from "./provider-runs.ts";
 
 const [cmd, ...rest] = process.argv.slice(2);
 const { apps, problems } = loadRegistry();
@@ -53,6 +56,23 @@ if (cmd === "validate") {
       values[k] = { bytes: new Uint8Array(readFileSync(path)), name: basename(path) };
     } else if (flag === "--preset") preset = arg;
     else if (flag === "--out") out = arg;
+    else if (flag === "--image-model" || flag === "--video-model") values[flag.slice(2).replace("-", "_")] = arg;
+  }
+  try {
+    const options = selection(app, values);
+    if (options) {
+      const history = new History(join(out, "history"));
+      const provider = new ProviderRuns(history, apps, () => new Runner({ allowDrafts }));
+      const { entry, done } = await provider.start(app, values, options, preset);
+      console.log("Submitted " + entry.id);
+      const result = await done;
+      if (result.status !== "succeeded") throw new Error(result.error?.message ?? result.status);
+      for (const output of result.outputs) console.log("Saved " + join(history.dir, entry.id, output.file));
+      process.exit(0);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : "Provider request failed.");
+    process.exit(1);
   }
   const runner = new Runner({ allowDrafts });
   const t0 = Date.now();

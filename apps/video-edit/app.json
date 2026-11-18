@@ -1,0 +1,16 @@
+{
+  "$schema": "../../schema/app.schema.json",
+  "id": "video-edit",
+  "name": "Video Edit",
+  "section": "video",
+  "summary": "Describe a change to a video with Gemini Omni Flash.",
+  "pack": "core",
+  "status": "ready",
+  "provider_only": true,
+  "inputs": [
+    { "id": "clip", "type": "video", "label": "Source video", "required": true, "limits": { "max_mb": 100, "seconds": [1, 15] } },
+    { "id": "prompt", "type": "textarea", "label": "Describe your edit", "required": true }
+  ],
+  "outputs": [{ "node": "result", "type": "video", "label": "Edited video" }],
+  "models": []
+}

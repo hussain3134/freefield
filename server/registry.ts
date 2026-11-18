@@ -54,6 +54,7 @@ export type AppManifest = {
   pack: string;
   status: "draft" | "ready";
   workflow?: string;
+  provider_only?: true;
   inputs: Input[];
   presets?: Preset[];
   outputs: Output[];
@@ -217,8 +218,11 @@ export function loadRegistry(root = repoRoot()): { apps: App[]; problems: Proble
       } else {
         problems.push({ app: folder, severity, message: `workflow ${manifest.workflow} not found` });
       }
-    } else if (manifest.status === "ready") {
+    } else if (manifest.status === "ready" && !manifest.provider_only) {
       problems.push({ app: folder, severity: "error", message: "ready apps need a workflow" });
+    }
+    if (manifest.provider_only && (manifest.workflow || manifest.models.length)) {
+      problems.push({ app: folder, severity: "error", message: "provider-only apps cannot declare a ComfyUI workflow or weights" });
     }
     if (app.graph) checkGraph(app, problems, severity);
     apps.push(app);

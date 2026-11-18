@@ -54,6 +54,8 @@ def basename(path: str) -> str:
 def build_packs(apps: list[dict]) -> dict[str, dict]:
     packs: dict[str, dict] = defaultdict(lambda: {"apps": [], "models": {}, "custom_nodes": {}})
     for a in apps:
+        if a.get("provider_only"):
+            continue
         p = packs[a["pack"]]
         p["apps"].append(a["id"])
         for m in a.get("models", []):
@@ -138,7 +140,7 @@ def vram_row(a: dict, measured: dict | None = None) -> dict:
 
 def write_vram(apps: list[dict], quiet: bool = False) -> None:
     peaks = example_peaks()
-    rows = [vram_row(a, peaks.get(a["id"])) for a in apps]
+    rows = [vram_row(a, peaks.get(a["id"])) for a in apps if not a.get("provider_only")]
     order = {"fits whole": 0, "fits by phases": 1, "tight (by phases)": 2, "needs Modal": 3, "no models": 4}
     rows.sort(key=lambda r: (order[r["verdict_24gb"]], r["largest_phase_gb"], r["id"]))
     docs = ROOT / "docs"

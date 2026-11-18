@@ -1,7 +1,7 @@
 // The waiter: turns form values into a filled workflow using only what app.json says,
 // asks the gateway to clear the GPU when the app's models change, and submits with the Comfy SDK.
 import { Comfy } from "@comfyorg/sdk";
-import type { App, Input } from "./registry.ts";
+import type { ApiWorkflow, App, Input } from "./registry.ts";
 import { isFileInput, modelKey } from "./registry.ts";
 
 export type FileValue = { bytes: Uint8Array; name: string; type?: string };
@@ -246,6 +246,17 @@ export class Runner {
       presetId,
     );
     return this.comfy.submit(wf);
+  }
+
+  async submitStage(app: App, graph: ApiWorkflow, values: Values, assets: Record<string, FileValue>, presetId?: string) {
+    await this.prepare(app);
+    const workflow = this.comfy.workflows.fromJson(graph);
+    const asset = (file: FileValue) => this.comfy.assets.fromBytes(file.bytes, { filename: file.name, contentType: file.type });
+    applyInputs(app, values, { setInput(node, field, value) {
+      if (graph[node]) workflow.setInput(node, field, value);
+    } }, asset, presetId);
+    for (const [node, file] of Object.entries(assets)) workflow.setInput(node, "image", asset(file));
+    return this.comfy.submit(workflow);
   }
 
   jobs() {

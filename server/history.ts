@@ -13,6 +13,8 @@ import { randomBytes } from "node:crypto";
 import type { ComfyEvent } from "@comfyorg/sdk";
 import { isFileInput, type App } from "./registry.ts";
 import type { FileValue, Frame, Values } from "./runner.ts";
+import type { Selection } from "./provider-models.ts";
+import type { Media, Operation } from "./provider-api.ts";
 
 export type Status = "starting" | "queued" | "running" | "succeeded" | "failed" | "canceled" | "expired" | "lost";
 const TERMINAL = new Set<Status>(["succeeded", "failed", "canceled", "expired", "lost"]);
@@ -37,6 +39,10 @@ export type Entry = {
   error: { message: string; class_type?: string | null; node?: string | null } | null;
   /** the visitor who started it, on a hosted demo; never sent to the browser */
   owner?: string;
+  pipeline?: {
+    selection: Selection;
+    stages: { kind: "image" | "video"; status: "pending" | "submitting" | "completed"; operation?: Operation | { model: "native"; id: string }; usage?: Record<string, unknown> }[];
+  };
 };
 
 /** The part of the SDK's Job the history uses (tests pass a fake). */
@@ -69,6 +75,7 @@ export type HistoryOptions = {
 };
 
 type Live = {
+  external?: AbortController;
   job?: JobLike;
   cancelRequested?: boolean;
   progress: { value: number; step: number | null; steps: number | null; node: string | null } | null;
@@ -226,7 +233,7 @@ export class History {
   }
 
   /** Record a run before it is submitted. `values` are the resolved values (defaults filled, seed picked). */
-  start(app: App, values: Values, preset?: string, owner?: string): Entry {
+  start(app: App, values: Values, preset?: string, owner?: string, pipeline?: Entry["pipeline"]): Entry {
     const id = newId();
     const folder = join(this.dir, id);
     mkdirSync(folder);
@@ -247,7 +254,7 @@ export class History {
     const entry: Entry = {
       id, app: app.id, status: "starting", job: null, created: new Date().toISOString(), started: null, finished: null,
       seconds: null, total: null, values: shown, preset: preset ?? null, inputs, outputs: [], error: null,
-      ...(owner ? { owner } : {}),
+      ...(owner ? { owner } : {}), ...(pipeline ? { pipeline } : {}),
     };
     this.save(entry);
     this.live.set(id, { progress: null, queue: null, preview: null });
@@ -256,12 +263,62 @@ export class History {
 
   /** The submit failed (bad workflow, backend unreachable, missing models): keep the reason with the run. */
   fail(entry: Entry, message: string, status: Status = "failed"): void {
+    if (this.removed.has(entry.id)) return;
     entry.status = status;
     entry.finished = new Date().toISOString();
     entry.total = secondsBetween(entry.created, entry.finished);
     entry.error = { message };
     this.save(entry);
     this.live.delete(entry.id);
+  }
+
+  async runExternal(entry: Entry, run: (signal: AbortSignal) => Promise<void>) {
+    const controller = new AbortController();
+    this.live.set(entry.id, { progress: null, queue: null, preview: null, external: controller });
+    entry.status = "running";
+    entry.started ??= new Date().toISOString();
+    this.save(entry);
+    try {
+      await run(controller.signal);
+      controller.signal.throwIfAborted();
+      entry.status = "succeeded";
+      entry.finished = new Date().toISOString();
+      entry.total = secondsBetween(entry.created, entry.finished);
+      this.checkpoint(entry);
+    } catch (error) {
+      this.fail(entry, controller.signal.aborted ? "Canceled. A submitted provider request may still incur charges."
+        : (error instanceof Error ? error.message : "Generation failed."), controller.signal.aborted ? "canceled" : "failed");
+    } finally {
+      this.live.delete(entry.id);
+    }
+    return entry;
+  }
+
+  checkpoint(entry: Entry) {
+    if (!this.removed.has(entry.id)) this.save(entry);
+  }
+
+  appendMedia(entry: Entry, node: string, media: Media) {
+    if (this.removed.has(entry.id)) return;
+    const file = "out-" + String(entry.outputs.length + 1).padStart(2, "0") + safeExt(media.name, media.type);
+    writeFileSync(join(this.dir, entry.id, file), media.bytes);
+    entry.outputs.push({ file, type: media.type.startsWith("video/") ? "video" : "image", name: media.name, node });
+  }
+
+  readForRun(id: string, owner?: string) { return this.read(id, owner); }
+
+  runValues(entry: Entry): Values {
+    return { ...entry.values, ...Object.fromEntries(entry.inputs.map((input) => [
+      input.id, { name: input.name, bytes: readFileSync(join(this.dir, entry.id, input.file)) },
+    ])) };
+  }
+
+  stageMedia(entry: Entry, node: string): Media | undefined {
+    const output = entry.outputs.find((o) => o.node === node);
+    if (!output) return;
+    const ext = extname(output.file);
+    return { bytes: readFileSync(join(this.dir, entry.id, output.file)), name: output.name,
+      type: Object.entries(EXT).find(([, value]) => value === ext)?.[0] ?? "application/octet-stream" };
   }
 
   /** Follow a submitted job to the end, then copy its outputs next to the record. */
@@ -410,9 +467,14 @@ export class History {
    * from its id). Runs that never got a job id, or are too old for the backend to still hold them,
    * are marked lost without asking it: asking would start a GPU just to hear the job is gone.
    */
-  resume(getJob: (id: string) => Promise<JobLike>, maxAgeMs = 60 * 60 * 1000): void {
+  resume(getJob: (id: string) => Promise<JobLike>, maxAgeMs = 60 * 60 * 1000, resumeExternal?: (entry: Entry) => void): void {
     for (const entry of this.entries()) {
       if (TERMINAL.has(entry.status)) continue;
+      if (entry.pipeline) {
+        if (resumeExternal) resumeExternal(entry);
+        else this.fail(entry, "Restart interrupted this provider run.", "lost");
+        continue;
+      }
       if (!entry.job) {
         this.fail(entry, "the server stopped before this run reached the backend", "lost");
         continue;
@@ -434,6 +496,7 @@ export class History {
     const live = this.live.get(id);
     if (!live) return false;
     live.cancelRequested = true;
+    live.external?.abort();
     if (live.job) await live.job.cancel().catch(() => {});
     return true;
   }
@@ -442,6 +505,7 @@ export class History {
     if (!ID.test(id) || !existsSync(join(this.dir, id))) return false;
     if (owner !== undefined && !this.read(id, owner)) return false;
     const live = this.live.get(id);
+    live?.external?.abort();
     if (live?.job) live.job.cancel().catch(() => {});
     this.removed.add(id);
     this.live.delete(id);
@@ -476,9 +540,10 @@ export class History {
   view(e: Entry) {
     const base = `/api/history/${e.id}`;
     const live = this.live.get(e.id);
-    const { owner: _owner, ...shown } = e;
+    const { owner: _owner, pipeline, ...shown } = e;
     return {
       ...shown,
+      ...(pipeline ? { pipeline: { selection: pipeline.selection, stages: pipeline.stages.map(({ kind, status, usage }) => ({ kind, status, usage })) } } : {}),
       inputs: e.inputs.map((i) => ({ ...i, url: `${base}/files/${i.file}` })),
       outputs: e.outputs.map((o) => ({ ...o, url: `${base}/files/${o.file}` })),
       progress: live?.progress ?? null,

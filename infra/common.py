@@ -31,7 +31,7 @@ MODEL_DIRS = ["diffusion_models", "text_encoders", "vae", "loras", "checkpoints"
 
 models_volume = modal.Volume.from_name("freefield-models", create_if_missing=True)
 lab_volume = modal.Volume.from_name("freefield-lab", create_if_missing=True)
-hf_secret = modal.Secret.from_name("huggingface")        # HF_TOKEN, for gated repos (LTX-2.5, FLUX 3 Klein)
+hf_secret = modal.Secret.from_name("huggingface-secret", required_keys=["HF_TOKEN"])
 freefield_secret = modal.Secret.from_name("freefield")   # FREEFIELD_TOKEN, the gateway's bearer token
 
 

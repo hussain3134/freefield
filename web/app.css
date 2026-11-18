@@ -385,6 +385,11 @@ input[type="range"]::-moz-range-thumb { width: 16px; height: 16px; border: 0; bo
 .field textarea.missing::placeholder { color: var(--bad); }
 .field input[type="text"], .field input[type="number"] { width: 100%; background: #0f0f11; border: 1px solid #2a2a2f; color: var(--ink); border-radius: 10px; padding: 8px 10px; font: inherit; }
 .field .help { margin: 0; color: var(--dim); font-size: 12px; }
+.provider-settings { display: grid; gap: 8px; }
+.provider-settings select { width: 100%; min-width: 0; padding: 6px 8px; font: inherit; color: var(--ink); background: #101012; border: 1px solid #303036; border-radius: 8px; }
+.composer .provider-settings { grid-template-columns: repeat(auto-fit, minmax(125px, 1fr)); margin: 6px 0; max-height: 30vh; overflow: auto; }
+.composer .provider-settings small { grid-column: 1 / -1; }
+.composer .provider-settings .field { padding: 7px; gap: 4px; }
 .seg { display: flex; flex-wrap: wrap; gap: 4px; padding: 3px; border-radius: 11px; background: #0f0f11; }
 .seg button { flex: 1 1 auto; min-width: 0; min-height: 30px; padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: #a9a9b1; font-weight: 600; font-size: 12.5px; cursor: pointer; line-height: 1.25; }
 .seg button:hover { color: var(--ink); }

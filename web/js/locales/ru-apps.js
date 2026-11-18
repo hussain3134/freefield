@@ -1,5 +1,10 @@
 // Russian display text for the app catalog. Never translate workflow or option values.
 export const ruApps = {
+  "Video Edit": "Редактирование видео",
+  "Describe a change to a video with Gemini Omni Flash.": "Опишите, как изменить видео с помощью Gemini Omni Flash.",
+  "Source video": "Исходное видео",
+  "Describe your edit": "Опишите изменения",
+  "Edited video": "Отредактированное видео",
   "768": "768",
   "1024": "1024",
   "1280": "1280",

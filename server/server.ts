@@ -26,6 +26,8 @@ import { extname, join, normalize } from "node:path";
 import { loadRegistry, repoRoot, isFileInput, type App } from "./registry.ts";
 import { explainSubmitError, InputError, resolveValues, Runner, type Values } from "./runner.ts";
 import { History } from "./history.ts";
+import { modelChoices, selection } from "./provider-models.ts";
+import { ProviderRuns } from "./provider-runs.ts";
 import { Flags } from "./flags.ts";
 import { DOOR_HTML, foreign, Guard, plainHttpToIp } from "./guard.ts";
 
@@ -74,6 +76,7 @@ const history = new History(join(outDir, "history"), {
   recheck: (jobId) => getRunner().jobs().get(jobId),
 });
 const flags = new Flags(join(root, "lab", "flags.json"), apps);
+const providerRuns = new ProviderRuns(history, apps, getRunner, undefined, contact);
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -93,7 +96,8 @@ function loadExamples(): Record<string, unknown> {
   }
 }
 
-const runnable = (a: App) => Boolean(a.workflowPath) && (a.status === "ready" || draftsAllowed);
+const runnable = (a: App) => (Boolean(a.workflowPath) || modelChoices(a).some((s) => s.options.some((m) => m.configured)))
+  && (a.status === "ready" || draftsAllowed);
 
 /**
  * The pack an app needs whose files the backend does not have, or null. Only known for a backend that is always on
@@ -129,6 +133,8 @@ function publicApp(a: App, files: Set<string> | null = null) {
   return {
     id: a.id, name: a.name, section: a.section, summary: a.summary ?? "", status: a.status, pack: a.pack,
     runnable: runnable(a),
+    provider_models: modelChoices(a),
+    provider_only: Boolean(a.provider_only),
     missing_pack: missingPack(a, files),
     higgsfield_feature: a.higgsfield_feature ?? null,
     modes: a.modes ?? null,
@@ -206,6 +212,13 @@ async function readValues(app: App, request: Request): Promise<{ values: Values;
     }
   }
   const preset = form.get("preset");
+  for (const stage of ["image", "video"]) {
+    for (const name of ["model", "aspect", "size", "quality", "duration", "resolution", "audio"]) {
+      const key = stage + "_" + name;
+      const value = form.get(key);
+      if (typeof value === "string") values[key] = value;
+    }
+  }
   return { values, preset: typeof preset === "string" && preset ? preset : undefined };
 }
 
@@ -332,17 +345,23 @@ const server = createServer(async (req, res) => {
       if (req.method === "POST" && area === "apps" && sub === "run") {
         const app = byId.get(id);
         if (!app) return send(res, 404, { error: "unknown app" });
-        if (!app.workflowPath) throw new InputError(`${app.id} has no workflow yet`);
-        if (!runnable(app)) throw new InputError(`${app.id} is a draft; start the server with FREEFIELD_DRAFTS=1 to run it anyway`);
-        const lacking = missingPack(app, await installedFiles());
-        if (lacking) throw new InputError(`${app.id} needs the ${lacking} pack, which this backend has not downloaded: add it to FREEFIELD_PACKS and restart the pod`);
+        if (app.status !== "ready" && !draftsAllowed) throw new InputError("This tool is a draft.");
         const refused = guard.refuse(activeRuns());
         if (refused) return send(res, 429, { error: refused });
         admitting++;
         let view;
         try {
           const { values, preset } = await readValues(app, await toRequest(req));
-          view = startRun(app, resolveValues(app, values), preset, me);
+          const options = selection(app, values);
+          if (options) {
+            const { entry } = await providerRuns.start(app, values, options, preset, me);
+            view = history.view(entry);
+          } else {
+            if (!app.workflowPath) throw new InputError("Configure credentials for this tool's API model.");
+            const lacking = missingPack(app, await installedFiles());
+            if (lacking) throw new InputError(`${app.id} needs the ${lacking} pack, which this backend has not downloaded: add it to FREEFIELD_PACKS and restart the pod`);
+            view = startRun(app, resolveValues(app, values), preset, me);
+          }
         } finally {
           admitting--;
         }
@@ -366,6 +385,16 @@ const server = createServer(async (req, res) => {
           return res.end(p.bytes);
         }
         if (req.method === "POST" && sub === "cancel") return send(res, 200, { canceled: await history.cancel(id, me) });
+        if (req.method === "POST" && sub === "retry" && id) {
+          const refused = guard.refuse(activeRuns());
+          if (refused) return send(res, 429, { error: refused });
+          admitting++;
+          try {
+            const { entry } = await providerRuns.retry(id, me);
+            guard.record();
+            return send(res, 202, history.view(entry));
+          } finally { admitting--; }
+        }
         if (req.method === "DELETE" && id && !sub) return send(res, history.remove(id, me) ? 200 : 404, { removed: id });
       }
       if (area === "gpu") {
@@ -417,7 +446,7 @@ const server = createServer(async (req, res) => {
 });
 
 // runs that were still going when the server stopped are followed again
-history.resume(async (jobId) => getRunner().jobs().get(jobId));
+history.resume(async (jobId) => getRunner().jobs().get(jobId), undefined, (entry) => providerRuns.resume(entry));
 
 server.listen(port, host, () => console.log(`freefield on http://${host}:${port} (${apps.length} apps)`
   + (guard.passcode ? " · passcode required" : "") + (guard.maxRunsPerDay ? ` · ${guard.maxRunsPerDay} runs a day` : "")));

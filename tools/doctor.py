@@ -78,10 +78,10 @@ def check_modal() -> None:
     try:
         names = {s.get("Name") or s.get("name") for s in json.loads(out)}
     except json.JSONDecodeError:
-        names = set(re.findall(r"\b(freefield|huggingface)\b", out))
+        names = set(re.findall(r"\b(freefield|huggingface-secret)\b", out))
     fixes = {
         "freefield": "python tools/setup_token.py   (same token in the secret and in .env)",
-        "huggingface": "modal secret create huggingface HF_TOKEN=hf_...",
+        "huggingface-secret": "modal secret create huggingface-secret HF_TOKEN=hf_...",
     }
     for name, fix in fixes.items():
         if name in names:

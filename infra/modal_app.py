@@ -2,7 +2,7 @@
 
 One-time setup (in your terminal, from the repo root):
     python tools/setup_token.py                               # gateway token, same value in the secret and in .env
-    modal secret create huggingface HF_TOKEN=hf_...          # accept the LTX-2.5 and FLUX 3 Klein licenses on the Hub first
+    modal secret create huggingface-secret HF_TOKEN=hf_...   # accept the LTX-2.5 and FLUX 3 Klein licenses on the Hub first
     python tools/catalog.py packs
 
 Models (once per pack; they stay in the "freefield-models" volume):

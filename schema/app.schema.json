@@ -34,6 +34,7 @@
       "pattern": "\\.api\\.json$",
       "description": "ComfyUI workflow in API format, relative to the app folder."
     },
+    "provider_only": { "const": true, "description": "This app runs through an external API and has no ComfyUI graph." },
     "source": {
       "type": "object",
       "additionalProperties": false,

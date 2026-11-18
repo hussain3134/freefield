@@ -53,6 +53,11 @@ export function openViewer(items, startKey) {
     const labels = Object.fromEntries((app?.inputs || []).map((x) => [x.id, x]));
     const settings = Object.entries(item.values || {}).filter(([k, v]) => labels[k] && labels[k] !== pi && labels[k].type !== "seed" && v !== "" && v !== null && v !== undefined && !(Array.isArray(v) && !v.length));
     const stats = [
+      ...(item.pipeline?.stages ?? []).map(({ kind }) => {
+        const id = item.pipeline.selection[kind + "_model"];
+        const label = app?.provider_models?.find((stage) => stage.kind === kind)?.options.find((model) => model.id === id)?.label;
+        return [t("models." + kind) + " · " + (label ?? id ?? t("models.native"))];
+      }),
       item.seconds ? [icon("clock"), t("view.gpu", { s: fmtSeconds(item.seconds) })] : null,
       item.total && (!item.seconds || item.total - item.seconds > 2) ? [item.seconds ? null : icon("clock"), t("view.total", { s: fmtSeconds(item.total) })] : null,
       item.gpu ? [icon("chip"), item.gpu.split(",")[0]] : null,
@@ -80,6 +85,10 @@ export function openViewer(items, startKey) {
         app ? el("button", { class: "btn lime", type: "button", onclick: () => { close(); hooks.recreate?.(item); } }, icon("redo"), t("act.recreate")) : null,
         url ? el("a", { class: "btn ghost", href: url, download: downloadName(item, url) }, icon("download"), t("act.download")) : null,
         url && output.type !== "audio" && hooks.useIn ? el("button", { class: "btn ghost", type: "button", onclick: (ev) => hooks.useIn(ev.currentTarget, { ...item, full: url, type: output.type }, close) }, icon("send"), t("act.usein")) : null,
+        ...["video-edit", "extend-video"].map((id) => url && output.type === "video" && hooks.omni &&
+          byId.get(id)?.provider_models?.some((stage) => stage.options.some((model) => model.id === "gemini-omni-1.2-flash" && model.configured))
+          ? el("button", { class: "btn ghost", type: "button", onclick: () => { close(); hooks.omni(id, { full: url }); } },
+            t(id === "video-edit" ? "models.edit_action" : "models.extend_action")) : null),
         el("button", { class: "btn ghost", type: "button", onclick: () => { close(); hooks.compare?.({ ...item, full: url, type: output.type }); } }, icon("compare"), t("act.compare")),
         item.kind === "example" && app ? flagButton(flags.key(app.id)) : null,
         item.kind === "history" ? deleteButton(async () => {

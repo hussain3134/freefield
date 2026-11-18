@@ -4,6 +4,14 @@
 import { store } from "./util.js";
 
 const en = {
+  "models.image": "Image model", "models.video": "Video model", "models.native": "ComfyUI",
+  "models.setup": "Credentials required", "models.image_aspect": "Aspect ratio", "models.video_aspect": "Aspect ratio",
+  "models.image_quality": "Quality", "models.image_size": "Image size", "models.video_duration": "Seconds",
+  "models.extend_duration": "Seconds to add", "models.video_resolution": "Video resolution", "models.video_audio": "Audio",
+  "models.on": "On", "models.off": "Off", "models.billing": "Google or OpenAI bills this generation directly.",
+  "models.mixed": "This run uses ComfyUI and a separately billed provider API.",
+  "models.retry": "Retry the unfinished stages? The provider may charge for another submission.",
+  "models.edit_action": "Edit video", "models.extend_action": "Extend video",
   "boot.error": "Is `npm run serve` running?", "status.ready": "Ready", "unit.gb": "GB", "unit.mb": "MB", "unit.s": "s",
   "nav.explore": "Explore", "nav.image": "Image", "nav.video": "Video", "nav.audio": "Audio", "nav.apps": "Apps", "nav.library": "Library",
   "nav.vram": "VRAM map", "nav.create": "Create", "nav.lang": "Language", "nav.menu": "Menu",
@@ -96,6 +104,14 @@ const en = {
 };
 
 const es = {
+  "models.image": "Modelo de imagen", "models.video": "Modelo de video", "models.native": "ComfyUI",
+  "models.setup": "Se requieren credenciales", "models.image_aspect": "Relación de aspecto", "models.video_aspect": "Relación de aspecto",
+  "models.image_quality": "Calidad", "models.image_size": "Tamaño de imagen", "models.video_duration": "Segundos",
+  "models.extend_duration": "Segundos adicionales", "models.video_resolution": "Resolución de video", "models.video_audio": "Audio",
+  "models.on": "Activado", "models.off": "Desactivado", "models.billing": "Google u OpenAI factura esta generación directamente.",
+  "models.mixed": "Esta generación usa ComfyUI y una API de pago independiente.",
+  "models.retry": "¿Reintentar las etapas pendientes? El proveedor puede cobrar por otro envío.",
+  "models.edit_action": "Editar video", "models.extend_action": "Extender video",
   "boot.error": "¿Está ejecutándose `npm run serve`?", "status.ready": "Listo", "unit.gb": "GB", "unit.mb": "MB", "unit.s": "s",
   "nav.explore": "Explorar", "nav.image": "Imagen", "nav.video": "Video", "nav.audio": "Audio", "nav.apps": "Apps", "nav.library": "Biblioteca",
   "nav.vram": "Mapa de VRAM", "nav.create": "Crear", "nav.lang": "Idioma", "nav.menu": "Menú",
@@ -188,6 +204,14 @@ const es = {
 };
 
 const ru = {
+  "models.image": "Модель изображения", "models.video": "Модель видео", "models.native": "ComfyUI",
+  "models.setup": "Нужны учётные данные", "models.image_aspect": "Пропорции", "models.video_aspect": "Пропорции",
+  "models.image_quality": "Качество", "models.image_size": "Размер изображения", "models.video_duration": "Секунды",
+  "models.extend_duration": "Добавить секунд", "models.video_resolution": "Разрешение видео", "models.video_audio": "Звук",
+  "models.on": "Вкл.", "models.off": "Выкл.", "models.billing": "Google или OpenAI выставит счёт за эту генерацию.",
+  "models.mixed": "В задании используются ComfyUI и отдельно оплачиваемый API.",
+  "models.retry": "Повторить незавершённые этапы? Провайдер может взять плату за повторный запрос.",
+  "models.edit_action": "Изменить видео", "models.extend_action": "Продлить видео",
   "boot.error": "Запущен ли `npm run serve`?", "status.ready": "Готово", "unit.gb": "ГБ", "unit.mb": "МБ", "unit.s": "с",
   "nav.explore": "Обзор", "nav.image": "Изображения", "nav.video": "Видео", "nav.audio": "Аудио", "nav.apps": "Приложения", "nav.library": "Библиотека",
   "nav.vram": "Карта видеопамяти", "nav.create": "Создать", "nav.lang": "Язык", "nav.menu": "Меню",

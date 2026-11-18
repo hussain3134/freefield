@@ -38,12 +38,83 @@ export function formFor(app) {
     values[inp.id] = validValue(inp, asPicks(inp, saved[inp.id])) ? asPicks(inp, saved[inp.id]) : fallback;
   }
   f = { values, files: {}, preset: (app.presets || []).some((p) => p.id === saved.__preset) ? saved.__preset : "", count: 1 };
+  f.models = saved.__models || {};
   forms.set(app.id, f);
   return f;
 }
 function persist(app) {
   const f = formFor(app);
-  store.set(`values.${app.id}`, { ...f.values, __preset: f.preset });
+  store.set(`values.${app.id}`, { ...f.values, __preset: f.preset, __models: f.models });
+}
+
+function activeModels(app, f) {
+  return (app.provider_models || []).flatMap((stage) => {
+    const key = stage.kind + "_model";
+    const id = f.models[key] ?? (stage.native ? "native" : stage.options[0]?.id);
+    const model = stage.options.find((option) => option.id === id);
+    return model ? [{ key, stage, model }] : [];
+  });
+}
+
+function providerSettings(app, redraw) {
+  if (!app.provider_models?.length) return null;
+  const f = formFor(app);
+  const active = activeModels(app, f);
+  const field = (label, value, options, update) => {
+    const select = el("select", {}, ...options.map((option) => el("option", {
+      value: String(option.value), selected: String(option.value) === String(value), disabled: option.disabled || false,
+    }, option.label)));
+    select.addEventListener("change", () => { update(select.value); persist(app); redraw(); });
+    return el("label", { class: "field" }, el("span", { class: "lbl" }, label), select);
+  };
+  const choices = app.provider_models.map((stage) => {
+    const key = stage.kind + "_model";
+    const model = active.find((entry) => entry.key === key)?.model;
+    return field(t("models." + stage.kind), model?.id || "native", [
+      ...(stage.native ? [{ value: "native", label: t("models.native") }] : []),
+      ...stage.options.map((option) => ({ value: option.id,
+        label: option.label + (option.configured ? "" : " · " + t("models.setup")),
+        disabled: !option.configured && stage.native })),
+    ], (value) => {
+      f.models[key] = value;
+      const picked = stage.options.find((option) => option.id === value);
+      for (const control of picked?.controls ?? []) {
+        if (!validValue(control, f.models[control.id])) f.models[control.id] = control.default;
+      }
+      if (picked?.api === "cloud" && Number(f.models.video_duration) !== 8) f.models.video_resolution = "720p";
+      if (app.id === "cinema-video" && picked && f.models[stage.kind + "_aspect"] !== undefined) {
+        const other = stage.kind === "image" ? "video_aspect" : "image_aspect";
+        f.models[other] = f.models[stage.kind + "_aspect"];
+      }
+    });
+  });
+  for (const { stage, model } of active) for (const control of model.controls) {
+    if (control.id === "video_aspect" && active.length > 1) continue;
+    const options = control.id === "video_resolution" && model.api === "cloud" && Number(f.models.video_duration || model.controls.find((x) => x.id === "video_duration")?.default) !== 8
+      ? control.options.filter((option) => option.value === "720p") : control.options;
+    const value = options.some((option) => String(option.value) === String(f.models[control.id])) ? f.models[control.id] : control.default;
+    const label = app.id === "extend-video" && control.id === "video_duration" ? "extend_duration" : control.id;
+    choices.push(field(t("models." + label), value, options.map((option) => ({
+      ...option, label: ["on", "off"].includes(option.label) ? t("models." + option.label) : option.label,
+    })), (value) => {
+      f.models[control.id] = value;
+      if (app.id === "cinema-video" && control.id === "image_aspect") f.models.video_aspect = value;
+      if (stage.kind === "video" && model.api === "cloud" && control.id === "video_duration" && value !== "8") f.models.video_resolution = "720p";
+    }));
+  }
+  const usesNative = active.length < app.provider_models.length || app.id === "face-swap";
+  return el("div", { class: "provider-settings" }, ...choices,
+    active.length ? el("small", { class: "dim" }, t(usesNative ? "models.mixed" : "models.billing")) : null);
+}
+
+function showNativeInput(app, f, input) {
+  const active = activeModels(app, f);
+  if (!active.length) return true;
+  if (app.id === "cinema-video" && active.length === 1) {
+    if (input.id === "seed") return true;
+    if (["duration", "enhance"].includes(input.id)) return active[0].stage.kind === "image";
+  }
+  return !["seed", "steps", "enhance", "aspect", "resolution", "duration", "upsample", "negative"].includes(input.id);
 }
 
 const ACCEPT = { image: "image/*", video: "video/*", audio: "audio/*" };
@@ -125,6 +196,14 @@ function buildForm(app, { randomSeed = false } = {}) {
     fd.append(inp.id, String(v));
   }
   if (f.preset) fd.append("preset", f.preset);
+  const active = activeModels(app, f);
+  for (const { key, model } of active) {
+    fd.append(key, model.id);
+    for (const control of model.controls) {
+      const value = validValue(control, f.models[control.id]) ? f.models[control.id] : control.default;
+      fd.append(control.id, String(value));
+    }
+  }
   return fd;
 }
 
@@ -139,7 +218,7 @@ async function submit(app, ui) {
     return false;
   }
   const f = formFor(app);
-  const n = Math.max(1, Math.min(4, f.count || 1));
+  const n = activeModels(app, f).length ? 1 : Math.max(1, Math.min(4, f.count || 1));
   persist(app);
   try {
     for (let k = 0; k < n; k++) await feed.run(app.id, buildForm(app, { randomSeed: n > 1 }));
@@ -170,6 +249,7 @@ export async function recreate(item, { run = false } = {}) {
     if (inp.type === "seed" && item.seed !== null && item.seed !== undefined) f.values[inp.id] = item.seed;
   }
   f.preset = item.preset || "";
+  f.models = { ...(item.pipeline?.selection || {}) };
   try {
     await Promise.all(item.inputs.map(async (i) => {
       const inp = app.inputs.find((x) => x.id === i.id);
@@ -191,8 +271,20 @@ export async function recreate(item, { run = false } = {}) {
 /** Where a result usually goes next, by the kind of file it is (the rest of the apps that take it follow). */
 const NEXT = {
   image: ["video", "motion-transfer", "h3-photo", "relight", "upscale", "inpaint", "edit", "expand-image", "character", "remove-bg"],
-  video: ["upscale-video", "extend-video", "reframe", "mixed-media", "video-remove-bg", "smooth", "sdr-hdr"],
+  video: ["video-edit", "extend-video", "upscale-video", "reframe", "mixed-media", "video-remove-bg", "smooth", "sdr-hdr"],
 };
+
+export async function openOmniTool(appId, item) {
+  const app = byId.get(appId);
+  if (!app) return;
+  try {
+    if (!setFile(app, app.inputs.find((input) => input.type === "video"), await fileFromUrl(item.full, "source.mp4"))) return;
+    formFor(app).models.video_model = "gemini-omni-1.2-flash";
+    persist(app);
+    if (location.hash !== "#/app/" + app.id) location.hash = "#/app/" + app.id;
+    else hooks.rerender?.();
+  } catch (error) { toast(error.message, { error: true }); }
+}
 
 /** "Use in…": put a result (an image or a video) into the first slot of that kind in another app, and open that app. */
 export function useIn(anchor, item, done) {
@@ -318,8 +410,10 @@ function seedEditor(app, inp, f, onChange) {
 }
 
 function genButton(app, onClick, { wide = false } = {}) {
-  const est = estimate(app);
-  const b = el("button", { class: `generate${wide ? " wide" : ""}`, type: "button", disabled: !app.runnable || Boolean(app.missing_pack),
+  const chosen = activeModels(app, formFor(app));
+  const est = chosen.length ? null : estimate(app);
+  const blocked = chosen.length ? chosen.some(({ model }) => !model.configured) : !app.runnable || Boolean(app.missing_pack);
+  const b = el("button", { class: `generate${wide ? " wide" : ""}`, type: "button", disabled: blocked,
     title: !app.runnable ? (app.status === "draft" ? t("ws.draft") : t("ws.noworkflow"))
       : app.missing_pack ? t("ws.nopack", { pack: app.missing_pack }) : est ? t("ws.est", { gpu: est.gpu }) : null },
     t("ws.generate"), est ? el("span", { class: "cost" }, icon("spark"), fmtShort(est.seconds)) : el("span", { class: "cost" }, icon("spark")));
@@ -399,7 +493,7 @@ function composerBar(app, rerenderBar) {
   chips.push(model);
 
   for (const inp of app.inputs) {
-    if (isMedia(inp.type) || inp === pi) continue;
+    if (isMedia(inp.type) || inp === pi || !showNativeInput(app, f, inp)) continue;
     chips.push(chipFor(app, inp, f));
   }
   if (app.presets?.length) {
@@ -421,12 +515,13 @@ function composerBar(app, rerenderBar) {
   const go = async () => { if (await submit(app, ui) && wsTab !== "history") { wsTab = "history"; hooks.rerender?.(); } };
   const gen = genButton(app, go);
   if (!app.runnable) { hint.hidden = false; hint.textContent = app.status === "draft" ? t("ws.draft") : t("ws.noworkflow"); }
-  else if (app.missing_pack) { hint.hidden = false; hint.textContent = t("ws.nopack", { pack: app.missing_pack }); }
+  else if (app.missing_pack && !activeModels(app, f).length) { hint.hidden = false; hint.textContent = t("ws.nopack", { pack: app.missing_pack }); }
 
   const bar = el("div", { class: "composer" },
     hint,
+    providerSettings(app, rerenderBar),
     el("div", { class: "cmp-top" }, attach, prompt || el("div", { class: "cmp-prompt dim", style: { paddingTop: "16px" } }, app.summary)),
-    el("div", { class: "cmp-row" }, ...chips, el("span", { class: "grow" }), countControl(f), gen),
+    el("div", { class: "cmp-row" }, ...chips, el("span", { class: "grow" }), activeModels(app, f).length ? null : countControl(f), gen),
     ...Object.values(pickers));
   return bar;
 }
@@ -650,15 +745,17 @@ function sidebarPanel(app, rerenderSide) {
 
   const main = [], adv = [];
   for (const inp of app.inputs) {
+    if (!showNativeInput(app, f, inp)) continue;
     if (isMedia(inp.type)) main.push(dropzone(app, inp, rerenderSide));
     else (isAdvanced(inp) ? adv : main).push(sideField(app, inp, f, ui));
   }
   if (app.presets?.length) adv.unshift(presetField(app, f));
   const advanced = adv.length ? el("details", { class: "adv" }, el("summary", {}, t("ws.advanced"), icon("chevD", "i-chev")), el("div", { class: "in" }, ...adv)) : null;
 
-  const scroll = el("div", { class: "side-scroll" }, card, modeSwitch(app), ...main, advanced);
-  const note = el("p", { class: "side-note" }, !app.runnable ? (app.status === "draft" ? t("ws.draft") : t("ws.noworkflow"))
-    : app.missing_pack ? t("ws.nopack", { pack: app.missing_pack }) : "");
+  const scroll = el("div", { class: "side-scroll" }, card, modeSwitch(app), providerSettings(app, rerenderSide), ...main, advanced);
+  const note = el("p", { class: "side-note" }, !app.runnable ? (app.provider_only ? t("models.setup")
+    : app.status === "draft" ? t("ws.draft") : t("ws.noworkflow"))
+    : app.missing_pack && !activeModels(app, f).length ? t("ws.nopack", { pack: app.missing_pack }) : "");
   ui.clearMissing = () => { scroll.querySelectorAll(".missing").forEach((n) => n.classList.remove("missing")); };
   ui.markMissing = (id) => {
     const n = ui.refs[id] || scroll.querySelector(`[data-slot="${id}"]`);
@@ -667,7 +764,7 @@ function sidebarPanel(app, rerenderSide) {
     n.scrollIntoView({ block: "center", behavior: "smooth" });
   };
   const go = async () => { if (await submit(app, ui) && wsTab !== "history") { wsTab = "history"; hooks.rerender?.(); } };
-  const foot = el("div", { class: "side-foot" }, el("div", { class: "row" }, countControl(f), genButton(app, go)), note);
+  const foot = el("div", { class: "side-foot" }, el("div", { class: "row" }, activeModels(app, f).length ? null : countControl(f), genButton(app, go)), note);
   const side = el("aside", { class: "side", "aria-label": app.name }, tabs, scroll, foot);
   side.addEventListener("dragover", (e) => e.preventDefault());
   side.addEventListener("drop", (e) => { e.preventDefault(); if (assignFiles(app, e.dataTransfer.files)) rerenderSide(); });
