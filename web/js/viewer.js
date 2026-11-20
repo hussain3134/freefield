@@ -46,10 +46,17 @@ export function openViewer(items, startKey) {
       fullMedia(output.type, output.url, { poster: item.poster }),
       items.length > 1 ? el("button", { class: "round navb next", type: "button", "aria-label": t("act.next"), onclick: () => go(1) }, icon("chevR")) : null,
       item.outputs.length > 1 ? el("div", { class: "tabs", style: { position: "absolute", bottom: "14px", left: "50%", transform: "translateX(-50%)" } },
-        ...item.outputs.map((o, k) => el("button", { type: "button", "aria-selected": String(k === out), onclick: () => { out = k; draw(); } }, `${k + 1}`))) : null].filter(Boolean));
+        ...item.outputs.map((o, k) => {
+          const version = o.node?.endsWith(":wmr") ? "cleaned"
+            : item.outputs.some(copy => copy.node === o.node + ":wmr") ? "original" : null;
+          return el("button", { type: "button", "aria-selected": String(k === out), onclick: () => { out = k; draw(); } },
+            version ? t("watermark." + version) + " · " + t("nav." + o.type) : `${k + 1}`);
+        })) : null].filter(Boolean));
 
     const pi = app ? promptInput(app) : null;
-    const prompt = pi ? String(item.values?.[pi.id] ?? "") : "";
+    const formPrompt = pi && String(item.values?.[pi.id] ?? "");
+    const prompts = item.generationPrompts ?? (formPrompt ? [{ text: formPrompt }] : []);
+    const multiStage = new Set(prompts.map(prompt => prompt.stage)).size > 1;
     const labels = Object.fromEntries((app?.inputs || []).map((x) => [x.id, x]));
     const settings = Object.entries(item.values || {}).filter(([k, v]) => labels[k] && labels[k] !== pi && labels[k].type !== "seed" && v !== "" && v !== null && v !== undefined && !(Array.isArray(v) && !v.length));
     const stats = [
@@ -58,6 +65,8 @@ export function openViewer(items, startKey) {
         const label = app?.provider_models?.find((stage) => stage.kind === kind)?.options.find((model) => model.id === id)?.label;
         return [t("models." + kind) + " · " + (label ?? id ?? t("models.native"))];
       }),
+      ...(item.pipeline?.stages ?? []).filter(stage => stage.watermark === "no-match" || stage.watermark === "failed")
+        .map(({ kind, watermark }) => [t("nav." + kind) + " · " + t("watermark." + watermark)]),
       item.seconds ? [icon("clock"), t("view.gpu", { s: fmtSeconds(item.seconds) })] : null,
       item.total && (!item.seconds || item.total - item.seconds > 2) ? [item.seconds ? null : icon("clock"), t("view.total", { s: fmtSeconds(item.total) })] : null,
       item.gpu ? [icon("chip"), item.gpu.split(",")[0]] : null,
@@ -68,10 +77,12 @@ export function openViewer(items, startKey) {
     aside.replaceChildren(...[
       el("div", { class: "approw" }, app ? thumb({ ...item, kind: "example", card: app.example?.card || item.card, poster: app.example?.poster, type: app.example?.type || item.type }, { play: "none" }) : null,
         el("div", {}, el("b", {}, app?.name ?? item.app), el("small", {}, item.kind === "example" ? t("view.example") : ago(item.created)))),
-      prompt ? el("div", { style: { display: "grid", gap: "6px" } },
-        el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, el("small", { class: "dim" }, t("view.prompt")),
-          el("button", { class: "btn small ghost", type: "button", onclick: () => navigator.clipboard?.writeText(prompt).then(() => toast(t("toast.copied"))) }, icon("copy"), t("act.copy"))),
-        el("div", { class: "prompt" }, prompt)) : null,
+      ...prompts.map(({ text, role, stage, source, reconstructed }) => el("div", { style: { display: "grid", gap: "6px" } },
+        el("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+          el("small", { class: "dim" }, [multiStage && t("nav." + stage), t(role ? "view.prompt." + role : (source ? "view.prompt.source" : "view.prompt")),
+            reconstructed && t("view.prompt.reconstructed")].filter(Boolean).join(" · ")),
+          el("button", { class: "btn small ghost", type: "button", onclick: () => navigator.clipboard?.writeText(text).then(() => toast(t("toast.copied"))) }, icon("copy"), t("act.copy"))),
+        el("div", { class: "prompt" }, text))),
       stats.length ? el("div", { class: "statline" }, ...stats.map((s) => el("span", {}, ...s))) : null,
       settings.length ? el("div", { style: { display: "grid", gap: "8px" } }, el("small", { class: "dim" }, t("view.settings")),
         el("dl", { class: "vals" }, ...settings.flatMap(([k, v]) => [el("dt", {}, labels[k].label),

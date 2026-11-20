@@ -95,6 +95,23 @@ test("a pod of your own: the passcode still guards it, but every browser sees on
   assert.deepEqual(new Guard({ passcode: "demo" }).visitor("ff_vid=" + "a".repeat(32)), { id: "a".repeat(32) }, "a public demo still splits it");
 });
 
+test("Tailscale accepts only its configured private routes and retains local access", () => {
+  const hostname = "studio.example.ts.net";
+  const ip = "100.100.100.20";
+  const opts = { loopbackOnly: true, tailscale: { hostname, ip } };
+  const headers = { host: hostname, "x-forwarded-host": hostname, "x-forwarded-proto": "https" };
+  assert.equal(foreign({ headers: { host: "127.0.0.1:3000" } }, opts), null);
+  assert.equal(foreign({ method: "POST", headers: { host: ip + ":3000", origin: "http://" + ip + ":3000" } }, opts), null);
+  assert.equal(foreign({ method: "POST", headers: { host: "studio:3000", origin: "http://studio:3000" } }, opts), null);
+  assert.equal(foreign({ method: "POST", headers: { ...headers, origin: "https://" + hostname } }, opts), null);
+  assert.match(foreign({ headers: { host: hostname } }, opts)!, /private Tailscale/);
+  assert.match(foreign({ headers: { ...headers, "tailscale-funnel-request": "?1" } }, opts)!, /private Tailscale/);
+  assert.match(foreign({ headers: { ...headers, host: "localhost:3000", "x-forwarded-host": "localhost:3000" } }, opts)!, /private Tailscale/);
+  assert.match(foreign({ headers: { ...headers, host: "studio:3000", "x-forwarded-host": "studio:3000" } }, opts)!, /private Tailscale/);
+  assert.match(foreign({ headers: { host: "192.168.1.20" } }, opts)!, /localhost/);
+  assert.match(foreign({ method: "POST", headers: { ...headers, origin: "https://other.example.test" } }, opts)!, /other sites/);
+});
+
 test("plain http to a bare IP (a Vast.ai port) gets cookies without Secure; names keep Secure", () => {
   const at = (host: string, headers: Record<string, string> = {}) => ({ headers: { host, ...headers } });
   assert.equal(plainHttpToIp(at("203.0.113.7:41234")), true);

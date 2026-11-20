@@ -4,7 +4,9 @@ import type { ApiWorkflow, App } from "./registry.ts";
 import { InputError, resolveValues, type FileValue, type Runner, type Values } from "./runner.ts";
 import { History, type Entry } from "./history.ts";
 import { ProviderApi, ProviderHttpError, validateVideo, type Media } from "./provider-api.ts";
-import { models, selection, stagePrompt, stages, type Model, type Selection, type Stage } from "./provider-models.ts";
+import { models, selection, stagePrompt, stages, supportsWatermark, watermarkBinary, type Model, type Selection, type Stage } from "./provider-models.ts";
+import { cleanWatermark } from "./watermark.ts";
+import { workflowPrompts, type GenerationPrompt } from "./generation-prompts.ts";
 
 const imageLimit = 20 * 1024 * 1024;
 const pixelLimit = 24_000_000;
@@ -78,18 +80,25 @@ export class ProviderRuns {
   private readonly runner: () => Runner;
   private readonly api: ProviderApi;
   private readonly onComfy: () => void;
+  private readonly clean: typeof cleanWatermark;
 
-  constructor(history: History, apps: App[], runner: () => Runner, api = new ProviderApi(), onComfy = () => {}) {
+  constructor(history: History, apps: App[], runner: () => Runner, api = new ProviderApi(), onComfy = () => {}, clean = cleanWatermark) {
     this.history = history;
     this.apps = new Map(apps.map((app) => [app.id, app]));
     this.runner = runner;
     this.api = api;
     this.onComfy = onComfy;
+    this.clean = clean;
   }
 
   async start(app: App, raw: Values, options: Selection, preset?: string, owner?: string, previous?: Entry) {
     const recipe = stages(app);
     const values = resolveValues(app, raw);
+    if (options.audio_model) {
+      delete values.seconds;
+      delete values.seed;
+      if (options.audio_vocals === "instrumental") delete values.lyrics;
+    }
     if (app.id === "cinema-video") {
       const aspect = options.video_aspect ?? options.image_aspect;
       const nativeAspect = app.inputs.find((input) => input.id === "aspect")?.options?.find((o) => o.label === aspect);
@@ -111,7 +120,7 @@ export class ProviderRuns {
       throw new InputError("This run requires the ComfyUI backend.");
     }
     const entry = this.history.start(app, values, preset, owner, {
-      selection: options, stages: recipe.map((stage) => ({ kind: stage.kind, status: "pending" })),
+      selection: options, stages: recipe.map((stage) => ({ kind: stage.kind, status: "pending", prompts: [] })),
     });
     if (previous?.pipeline) {
       for (const [index, progress] of previous.pipeline.stages.entries()) {
@@ -120,7 +129,7 @@ export class ProviderRuns {
         const media = this.history.stageMedia(previous, node);
         if (!media) break;
         this.history.appendMedia(entry, node, media);
-        entry.pipeline!.stages[index] = { ...progress };
+        entry.pipeline!.stages[index] = { ...progress, watermark: undefined };
       }
       this.history.checkpoint(entry);
     }
@@ -173,12 +182,16 @@ export class ProviderRuns {
           this.history.checkpoint(entry);
           if (signal.aborted && operation.model !== "native") void this.api.cancel(operation).catch(() => {});
         };
+        const recordPrompts = (prompts: GenerationPrompt[]) => {
+          progress.prompts = prompts;
+          this.history.checkpoint(entry);
+        };
         let media: Media;
         try {
           if (!model) {
-            media = await this.comfyStage(app, stage, values, still, entry.preset ?? undefined, signal, record, progress.operation?.id);
+            media = await this.comfyStage(app, stage, values, still, entry.preset ?? undefined, signal, record, recordPrompts, progress.operation?.id);
           } else {
-            const result = await this.providerStage(app, stage, model, values, pipeline.selection, still, entry.preset ?? undefined, signal, record, progress.operation);
+            const result = await this.providerStage(app, stage, model, values, pipeline.selection, still, entry.preset ?? undefined, signal, record, recordPrompts, progress.operation);
             media = result.media;
             progress.usage = result.usage;
           }
@@ -195,13 +208,50 @@ export class ProviderRuns {
         if (stage.kind === "video") entry.outputs.sort((a, b) => Number(b.type === "video") - Number(a.type === "video"));
         this.history.checkpoint(entry);
       }
+      const wmr = watermarkBinary();
+      if (!wmr) return;
+      for (const [index, { kind }] of recipe.entries()) {
+        const model = pipeline.selection[kind + "_model"] as Model | undefined;
+        const progress = pipeline.stages[index];
+        if (!model || !supportsWatermark(model) || pipeline.selection[kind + "_auto_watermark"] !== "on" || progress.watermark) continue;
+        signal.throwIfAborted();
+        const node = outputNode(app, kind);
+        const original = this.history.stageMedia(entry, node);
+        if (!original) continue;
+        let cleaned;
+        try {
+          cleaned = await this.clean(wmr, Buffer.from(original.bytes), original.type, "auto", false, signal);
+          signal.throwIfAborted();
+        } catch {
+          signal.throwIfAborted();
+          progress.watermark = "failed";
+          this.history.checkpoint(entry);
+          continue;
+        }
+        progress.watermark = cleaned ? "cleaned" : "no-match";
+        if (cleaned) {
+          const position = entry.outputs.findIndex(output => output.node === node);
+          const size = entry.outputs.length;
+          this.history.appendMedia(entry, node + ":wmr", { ...cleaned, name: kind === "image" ? "cleaned.png" : "cleaned.mp4" });
+          if (entry.outputs.length > size) entry.outputs.splice(position, 0, entry.outputs.pop()!);
+        }
+        this.history.checkpoint(entry);
+      }
     });
   }
 
   private async providerStage(app: App, stage: Stage, model: Model, values: Values, options: Selection, still: Media | undefined,
     preset: string | undefined, signal: AbortSignal, record: (operation: { model: Model; id: string }) => void,
-    operation?: { model: Model | "native"; id: string }) {
+    recordPrompts: (prompts: GenerationPrompt[]) => void, operation?: { model: Model | "native"; id: string }) {
     let prompt = stagePrompt(app, stage, values, preset);
+    let flowLyrics: string | undefined;
+    if (stage.kind === "audio") {
+      const lyrics = String(values.lyrics ?? "").trim();
+      if (options.audio_vocals === "instrumental") prompt += "\n\nInstrumental only, no vocals.";
+      else if (lyrics && models[model].api === "flow") flowLyrics = lyrics;
+      else if (lyrics) prompt += "\n\nUse these lyrics:\n" + lyrics;
+      if (values.reference_image) prompt += "\n\nUse the reference image to inspire the mood and arrangement.";
+    }
     let files = still ? [await imageFile(still)] : [];
     if (!still) for (const input of app.inputs) {
       const file = values[input.id] as FileValue;
@@ -211,6 +261,7 @@ export class ProviderRuns {
     }
     let mask: Media | undefined;
     let original: Media | undefined;
+    const ctx = { signal, record, recordPrompts, pending: operation?.model === model ? { model, id: operation.id } : undefined };
     const masked = app.id === "face-swap" || app.id === "inpaint";
     if (masked) {
       original = files[0];
@@ -223,8 +274,7 @@ export class ProviderRuns {
         prompt += " The last reference is a mask. Edit the white region of the first image and preserve its framing and all other content.";
       }
       const result = await this.api.run({ model, stage, prompt, options, files,
-        mask: models[model].api === "openai" ? { bytes: prepared.apiMask, type: "image/png", name: "mask.png" } : undefined },
-      { signal, record, pending: operation?.model === model ? { model, id: operation.id } : undefined });
+        mask: models[model].api === "openai" ? { bytes: prepared.apiMask, type: "image/png", name: "mask.png" } : undefined }, ctx);
       return { ...result, media: await preserveOutsideMask(original, mask, result.media) };
     }
     if (models[model].api === "cloud") {
@@ -233,9 +283,7 @@ export class ProviderRuns {
     }
     if (stage.kind === "video" && files.length && !stage.mode) prompt = "Use the supplied image as the first frame. " + prompt;
     if (app.id === "genjutsu" && models[model].api === "cloud") prompt = "Use the reference sheet as source material, not as a collage in the output. " + prompt;
-    return this.api.run({ model, stage, prompt, options, files }, {
-      signal, record, pending: operation?.model === model ? { model, id: operation.id } : undefined,
-    });
+    return this.api.run({ model, stage, prompt, options, files, lyrics: flowLyrics }, ctx);
   }
 
   private async waitComfy(job: Awaited<ReturnType<Runner["submitStage"]>>, node: string, signal: AbortSignal) {
@@ -259,7 +307,8 @@ export class ProviderRuns {
   }
 
   private async comfyStage(app: App, stage: Stage, values: Values, still: Media | undefined, preset: string | undefined,
-    signal: AbortSignal, record: (op: { model: "native"; id: string }) => void, operation?: string) {
+    signal: AbortSignal, record: (op: { model: "native"; id: string }) => void,
+    recordPrompts: (prompts: GenerationPrompt[]) => void, operation?: string) {
     this.onComfy();
     const node = outputNode(app, stage.kind);
     if (operation) return this.waitComfy(await this.runner().jobs().get(operation), node, signal);
@@ -271,6 +320,7 @@ export class ProviderRuns {
       graph["398:351"].inputs.input = ["provider_still", 0];
       assets.provider_still = still;
     }
+    recordPrompts(workflowPrompts(app, values, preset, stage.kind, graph));
     const job = await this.runner().submitStage(app, graph, values, assets, preset);
     record({ model: "native", id: job.id });
     return this.waitComfy(job, node, signal);

@@ -11,6 +11,7 @@ import { flags, flagButton } from "./flags.js";
 import { feed, feedView, hooks } from "./feed.js";
 import { openPainter, maskPreview } from "./paint.js";
 import { needNode, needText } from "./models.js";
+import { openWatermark } from "./watermark.js";
 
 // ------------------------------------------------------------------ form state (per app, kept while the page is open)
 const forms = new Map();
@@ -74,7 +75,7 @@ function providerSettings(app, redraw) {
     return field(t("models." + stage.kind), model?.id || "native", [
       ...(stage.native ? [{ value: "native", label: t("models.native") }] : []),
       ...stage.options.map((option) => ({ value: option.id,
-        label: option.label + (option.configured ? "" : " · " + t("models.setup")),
+        label: option.label + (option.configured ? "" : " · " + t(option.api === "flow" ? "models.flow_setup" : "models.setup")),
         disabled: !option.configured && stage.native })),
     ], (value) => {
       f.models[key] = value;
@@ -96,7 +97,7 @@ function providerSettings(app, redraw) {
     const value = options.some((option) => String(option.value) === String(f.models[control.id])) ? f.models[control.id] : control.default;
     const label = app.id === "extend-video" && control.id === "video_duration" ? "extend_duration" : control.id;
     choices.push(field(t("models." + label), value, options.map((option) => ({
-      ...option, label: ["on", "off"].includes(option.label) ? t("models." + option.label) : option.label,
+      ...option, label: ["on", "off", "auto", "instrumental"].includes(option.label) ? t("models." + option.label) : option.label,
     })), (value) => {
       f.models[control.id] = value;
       if (app.id === "cinema-video" && control.id === "image_aspect") f.models.video_aspect = value;
@@ -104,13 +105,24 @@ function providerSettings(app, redraw) {
     }));
   }
   const usesNative = active.length < app.provider_models.length || app.id === "face-swap";
+  const usesFlow = active.some(({ model }) => model.api === "flow");
+  const usesCodex = active.some(({ model }) => model.api === "codex");
+  const usesApi = active.some(({ model }) => model.api !== "flow" && model.api !== "codex");
   return el("div", { class: "provider-settings" }, ...choices,
-    active.length ? el("small", { class: "dim" }, t(usesNative ? "models.mixed" : "models.billing")) : null);
+    active.some(({ model }) => model.id === "lyria-3.5") ? el("small", { class: "dim" }, t("models.lyria_length")) : null,
+    usesFlow ? el("small", { class: "dim" }, t("models.flow_billing")) : null,
+    usesCodex ? el("small", { class: "dim" }, t("models.codex_billing")) : null,
+    usesApi ? el("small", { class: "dim" }, t(usesNative ? "models.mixed" : "models.billing")) : null);
 }
 
-function showNativeInput(app, f, input) {
+function visibleInput(app, f, input) {
   const active = activeModels(app, f);
+  if (input.provider_only) return active.some(({ model }) => model.api !== "flow");
   if (!active.length) return true;
+  if (app.id === "music") {
+    if (input.id === "seconds") return false;
+    if (input.id === "lyrics") return f.models.audio_vocals !== "instrumental";
+  }
   if (app.id === "cinema-video" && active.length === 1) {
     if (input.id === "seed") return true;
     if (["duration", "enhance"].includes(input.id)) return active[0].stage.kind === "image";
@@ -154,8 +166,8 @@ function dropMasksOf(app, id) {
 
 /** Put dropped or pasted files into the first matching slots. */
 function assignFiles(app, files) {
-  const slots = app.inputs.filter((i) => isMedia(i.type) && !i.paint);   // a painted mask is made with the brush, not dropped
   const f = formFor(app);
+  const slots = app.inputs.filter((i) => isMedia(i.type) && !i.paint && visibleInput(app, f, i));
   let used = 0;
   for (const file of files) {
     const free = slots.find((s) => fileMatches(s.type, file) && !f.files[s.id]) || slots.find((s) => fileMatches(s.type, file));
@@ -186,6 +198,7 @@ function buildForm(app, { randomSeed = false } = {}) {
   const f = formFor(app);
   const fd = new FormData();
   for (const inp of app.inputs) {
+    if (app.id === "music" && !visibleInput(app, f, inp)) continue;
     if (isMedia(inp.type)) { const x = f.files[inp.id]; if (x) fd.append(inp.id, x.file, x.file.name); continue; }
     const v = f.values[inp.id];
     if (inp.type === "toggle") { fd.append(inp.id, v ? "true" : "false"); continue; }
@@ -251,6 +264,9 @@ export async function recreate(item, { run = false } = {}) {
   }
   f.preset = item.preset || "";
   f.models = { ...(item.pipeline?.selection || {}) };
+  for (const inp of app.inputs) {
+    if (inp.provider_only && !item.inputs.some(({ id }) => id === inp.id)) clearFile(app, inp.id);
+  }
   try {
     await Promise.all(item.inputs.map(async (i) => {
       const inp = app.inputs.find((x) => x.id === i.id);
@@ -290,7 +306,7 @@ export async function openOmniTool(appId, item) {
 /** "Use in…": put a result (an image or a video) into the first slot of that kind in another app, and open that app. */
 export function useIn(anchor, item, done) {
   const type = item.type;
-  const slotOf = (a) => a.inputs.find((i) => i.type === type && !i.paint);
+  const slotOf = (a) => a.inputs.find((i) => i.type === type && !i.paint && !i.provider_only);
   const first = (NEXT[type] || []).map((id) => byId.get(id)).filter((a) => a && slotOf(a));
   const rest = apps.filter((a) => slotOf(a) && !first.includes(a)).sort((x, y) => x.name.localeCompare(y.name));
   const go = async (a) => {
@@ -308,7 +324,15 @@ export function useIn(anchor, item, done) {
   };
   const row = (a) => el("button", { class: "opt", type: "button", onclick: () => go(a) },
     el("span", { class: "thumb" }, appThumb(a)), el("span", { class: "two" }, el("b", {}, a.name), el("small", {}, tagline(a))));
-  popover(anchor, el("div", { class: "usein" }, el("h4", {}, t("act.usein")), ...first.map(row),
+  const clean = ["image", "video"].includes(type) ? el("button", { class: "opt", type: "button", onclick: async () => {
+    closePopover();
+    done?.();
+    try {
+      const ext = extOf(item.full) || (type === "video" ? "mp4" : "png");
+      openWatermark(await fileFromUrl(item.full, `${item.app || "result"}.${ext}`));
+    } catch (error) { toast(error.message, { error: true }); }
+  } }, icon("compare"), t("watermark.title")) : null;
+  popover(anchor, el("div", { class: "usein" }, el("h4", {}, t("act.usein")), clean, ...first.map(row),
     rest.length ? el("details", {}, el("summary", {}, t("usein.more", { n: rest.length })), ...rest.map(row)) : null), { width: 340 });
 }
 
@@ -445,7 +469,7 @@ function countControl(f) {
 function composerBar(app, rerenderBar) {
   const f = formFor(app);
   const pi = promptInput(app);
-  const mediaInputs = app.inputs.filter((i) => isMedia(i.type));
+  const mediaInputs = app.inputs.filter((i) => isMedia(i.type) && visibleInput(app, f, i));
   const pickers = Object.fromEntries(mediaInputs.map((inp) => {
     const input = el("input", { type: "file", accept: ACCEPT[inp.type], hidden: true });
     input.addEventListener("change", () => { if (input.files[0] && setFile(app, inp, input.files[0])) rerenderBar(); input.value = ""; });
@@ -494,7 +518,7 @@ function composerBar(app, rerenderBar) {
   chips.push(model);
 
   for (const inp of app.inputs) {
-    if (isMedia(inp.type) || inp === pi || !showNativeInput(app, f, inp)) continue;
+    if (isMedia(inp.type) || inp === pi || !visibleInput(app, f, inp)) continue;
     chips.push(chipFor(app, inp, f));
   }
   if (app.presets?.length) {
@@ -746,7 +770,7 @@ function sidebarPanel(app, rerenderSide) {
 
   const main = [], adv = [];
   for (const inp of app.inputs) {
-    if (!showNativeInput(app, f, inp)) continue;
+    if (!visibleInput(app, f, inp)) continue;
     if (isMedia(inp.type)) main.push(dropzone(app, inp, rerenderSide));
     else (isAdvanced(inp) ? adv : main).push(sideField(app, inp, f, ui));
   }

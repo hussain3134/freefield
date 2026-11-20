@@ -80,7 +80,7 @@ export function topbar({ onLang }) {
   gpuState.listeners.clear();   // a rebuilt bar (language change) replaces the old pill
   const items = [
     ["explore", "#/", "compass"], ["image", "#/image", "image"], ["video", "#/video", "video"], ["audio", "#/audio", "audio"],
-    ["apps", "#/apps", "layers"], ["library", "#/library", "film"],
+    ["apps", "#/apps", "layers"], ["library", "#/library", "film"], ["watermark", "#/watermark", "compare"],
   ];
   const links = new Map();
   const nav = el("nav", { class: "nav-main", "aria-label": "Freefield" });

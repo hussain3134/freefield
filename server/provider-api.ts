@@ -2,14 +2,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import { GoogleAuth } from "google-auth-library";
 import { InputError, type FileValue } from "./runner.ts";
 import { models, type Model, type Selection, type Stage } from "./provider-models.ts";
+import { runFlow } from "./provider-flow.ts";
+import { runCodexImageGen } from "./provider-codex.ts";
+import type { GenerationPrompt } from "./generation-prompts.ts";
 
 export type Media = { bytes: Uint8Array; type: string; name: string };
 export type ProviderResult = { media: Media; usage?: Record<string, unknown> };
 export type ProviderRequest = {
-  model: Model; stage: Stage; prompt: string; files: Media[]; options: Selection; mask?: Media;
+  model: Model; stage: Stage; prompt: string; files: Media[]; options: Selection; mask?: Media; lyrics?: string;
 };
 export type Operation = { id: string; model: Model };
-type Context = { signal: AbortSignal; record: (operation: Operation) => void; pending?: Operation };
+type Context = { signal: AbortSignal; record: (operation: Operation) => void; pending?: Operation;
+  recordPrompts?: (prompts: GenerationPrompt[]) => void };
 type Block = { type: string; mime_type?: string; data?: string; uri?: string };
 type Interaction = {
   id?: string; status?: string; usage?: Record<string, unknown>;
@@ -36,9 +40,14 @@ export function validateVideo(file: FileValue): Media {
 export function encoded(data: string | undefined, type: string): Media {
   if (!data || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) throw new Error("The provider did not return usable media.");
   const bytes = Buffer.from(data, "base64");
-  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "video/mp4": "mp4" }[type];
+  if (type === "audio/mp3") type = "audio/mpeg";
+  const ext = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "video/mp4": "mp4", "audio/mpeg": "mp3" }[type];
   if (!ext || !bytes.length || bytes.length > mp4Limit) throw new Error("The provider returned unsupported media.");
   if (type === "video/mp4") validateVideo({ bytes, name: "video.mp4" });
+  if (type === "audio/mpeg" && !(bytes.length >= 10 && bytes.toString("ascii", 0, 3) === "ID3") &&
+    !(bytes.length >= 4 && bytes[0] === 0xff && (bytes[1] & 0xe6) === 0xe2)) {
+    throw new Error("The provider did not return usable MP3 audio.");
+  }
   return { bytes, type, name: "result." + ext };
 }
 
@@ -106,10 +115,20 @@ export class ProviderApi {
   }
 
   async run(input: ProviderRequest, ctx: Context): Promise<ProviderResult> {
-    switch (models[input.model].api) {
+    const { api } = models[input.model];
+    if (api === "gemini" && input.stage.mode === "extend") input = { ...input, prompt: "Extend this video. " + input.prompt };
+    if (!ctx.pending && ctx.recordPrompts) {
+      const stage = input.stage.kind;
+      const prompts: GenerationPrompt[] = [{ text: input.prompt, stage, ...(api === "codex" ? { source: true } : {}) }];
+      if (input.lyrics) prompts.push({ text: input.lyrics, stage, role: "lyrics" });
+      ctx.recordPrompts(prompts);
+    }
+    switch (api) {
       case "openai": return this.openai(input, ctx.signal);
       case "cloud": return this.veo(input, ctx);
       case "gemini": return this.gemini(input, ctx);
+      case "flow": return runFlow(input, ctx.signal);
+      case "codex": return runCodexImageGen(input, ctx.signal);
     }
   }
 
@@ -182,15 +201,15 @@ export class ProviderApi {
           ? { type: "video", uri: (await this.uploadVideo(file, ctx.signal)).uri }
           : { type: "image", data: b64(file.bytes), mime_type: file.type });
       }
-      const prompt = stage.mode === "extend" ? "Extend this video. " + input.prompt : input.prompt;
       const video = stage.kind === "video";
       const format = video
         ? { type: "video", delivery: "uri", aspect_ratio: options.video_aspect, resolution: options.video_resolution,
             duration: options.video_duration ? options.video_duration + "s" : undefined }
-        : { type: "image", aspect_ratio: options.image_aspect, image_size: options.image_size ?? "1K" };
-      const body = { model, input: [...blocks, { type: "text", text: prompt }], response_format: format, ...(video ? { background: true } : {}) };
+        : stage.kind === "audio" ? { type: "audio" }
+          : { type: "image", aspect_ratio: options.image_aspect, image_size: options.image_size ?? "1K" };
+      const body = { model, input: [...blocks, { type: "text", text: input.prompt }], response_format: format, ...(video ? { background: true } : {}) };
       interaction = await (await this.request(google + "/v1beta/interactions", json(body, headers), "Gemini", ctx.signal)).json();
-      if (interaction.id && video) ctx.record({ id: interaction.id, model });
+      if (interaction.id && (video || stage.kind === "audio")) ctx.record({ id: interaction.id, model });
     }
     if (ctx.pending || (interaction.status && interaction.status !== "completed")) {
       const id = this.interactionId(interaction.id);
@@ -201,9 +220,14 @@ export class ProviderApi {
     const block = interaction.steps?.filter((s) => s.type === "model_output")
       .flatMap((s) => s.content ?? []).findLast((b) => b.type === stage.kind);
     if (!block) throw new Error("Gemini did not return media. Check the prompt and provider restrictions.");
+    const defaultType = { image: "image/png", video: "video/mp4", audio: "audio/mpeg" }[stage.kind];
+    const type = block.mime_type?.split(";")[0].trim().toLowerCase() || defaultType;
+    if (stage.kind === "audio" && !["audio/mp3", "audio/mpeg"].includes(type)) {
+      throw new Error("Gemini returned an unsupported audio format.");
+    }
     const media = block.uri && stage.kind === "video"
       ? await this.downloadVideo(block.uri, ctx.signal)
-      : encoded(block.data, block.mime_type ?? (stage.kind === "image" ? "image/png" : "video/mp4"));
+      : encoded(block.data, type);
     return { media, usage: interaction.usage };
   }
 

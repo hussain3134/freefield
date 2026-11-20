@@ -80,6 +80,16 @@ svg.i { width: 1em; height: 1em; flex: none; }
 /* ------------------------------------------------------------------ shared bits */
 .view { min-height: calc(100vh - var(--top)); }
 .page { padding: 26px 22px 80px; max-width: 1480px; margin: 0 auto; }
+.wm-page > p { margin: 8px 0 24px; }
+.wm-layout { display: grid; grid-template-columns: minmax(240px, 290px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.wm-panel, .wm-preview figure { padding: 16px; }
+.wm-panel input[type="file"] { max-width: 100%; }
+.wm-controls { display: grid; gap: 14px; min-width: 0; border: 0; margin: 0; padding: 0; }
+.wm-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.wm-preview figure { margin: 0; }
+.wm-preview :is(img, video) { display: block; width: 100%; height: auto; border-radius: 8px; margin-top: 10px; }
+.wm-page [hidden] { display: none; }
+@media (max-width: 720px) { .wm-layout { grid-template-columns: minmax(0, 1fr); } }
 .sec-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin: 38px 0 14px; }
 .sec-head h2 { margin: 0; font-size: 26px; }
 .sec-head p { margin: 6px 0 0; color: var(--dim); font-size: 13px; }

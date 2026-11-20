@@ -30,10 +30,11 @@ export function entryItem(e) {
     kind: "history", key: e.id, id: e.id, app: e.app, status: e.status,
     type: first?.type || app?.outputs?.[0]?.type || "image",
     card: first?.url || null, poster: null, full: first?.url || null,
-    outputs: e.outputs.map((o) => ({ type: o.type, url: o.url, name: o.name })),
+    outputs: e.outputs.map((o) => ({ type: o.type, url: o.url, name: o.name, node: o.node })),
     inputs: e.inputs.map((i) => ({ id: i.id, label: labels[i.id]?.label || i.id, type: i.type, thumb: i.type === "image" ? i.url : null, file: i.url,
       play: i.type === "image" ? null : i.url, name: i.name })),
     values: e.values || {}, seed: e.values?.seed ?? null, preset: e.preset, seconds: e.seconds, total: e.total, created: e.created,
+    generationPrompts: e.generationPrompts,
     started: e.started, error: e.error, progress: e.progress, queue: e.queue, preview: e.preview, gpu: null, peak: null, pipeline: e.pipeline,
   };
 }

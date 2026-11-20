@@ -15,6 +15,7 @@ export type Input = {
   help?: string;
   default?: unknown;
   required?: boolean;
+  provider_only?: true;
   min?: number;
   max?: number;
   step?: number;
@@ -131,7 +132,9 @@ function checkGraph(app: App, problems: Problem[], severity: Problem["severity"]
   for (const p of app.presets ?? []) for (const s of p.sets) if (typeof s.value === "string") checkTemplate(s.value, `preset "${p.id}"`);
   for (const input of app.inputs) {
     const writes = Boolean(input.bind?.length) || (input.options ?? []).some((o) => o.sets?.length);
-    if (!writes && !usedInTemplates.has(input.id)) {
+    if (input.provider_only && (writes || usedInTemplates.has(input.id))) {
+      say('hosted input "' + input.id + '" cannot change the ComfyUI workflow');
+    } else if (!input.provider_only && !writes && !usedInTemplates.has(input.id)) {
       say(`input "${input.id}" is not bound to any node and no template uses it`);
     }
   }

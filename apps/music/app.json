@@ -39,6 +39,13 @@
       ]
     },
     {
+      "id": "reference_image",
+      "type": "image",
+      "label": "Reference image",
+      "provider_only": true,
+      "limits": { "max_mb": 10 }
+    },
+    {
       "id": "seconds",
       "type": "slider",
       "label": "Max seconds",

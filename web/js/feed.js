@@ -171,7 +171,9 @@ function doneCard(e, list) {
   const app = byId.get(e.app);
   const item = entryItem(e);
   const media = thumb(item, { play: "visible" });
-  const prompt = app && promptInput(app) ? String(e.values?.[promptInput(app).id] ?? "") : "";
+  const input = app && promptInput(app);
+  const prompt = e.generationPrompts?.find(p => !p.role && p.stage === item.type)?.text
+    ?? e.generationPrompts?.find(p => !p.role)?.text ?? (input ? String(e.values?.[input.id] ?? "") : "");
   const stop = (fn) => (ev) => { ev.stopPropagation(); fn(); };
   const open = () => hooks.open?.(list().map(entryItem), e.id);
   const dl = el("a", { class: "mini", href: item.full, download: downloadName(item, item.full), title: t("act.download"), "aria-label": t("act.download"),

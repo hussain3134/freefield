@@ -88,7 +88,7 @@ export function resolveValues(app: App, values: Values): Values {
       v = Math.floor(Math.random() * 2 ** 48);
     }
     if (v === undefined) {
-      if (input.required || isFileInput(input)) throw new InputError(`${input.id}: required`);
+      if (input.required || (isFileInput(input) && !input.provider_only)) throw new InputError(`${input.id}: required`);
       continue;
     }
     if (isFileInput(input)) {

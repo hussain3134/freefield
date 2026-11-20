@@ -56,7 +56,7 @@ if (cmd === "validate") {
       values[k] = { bytes: new Uint8Array(readFileSync(path)), name: basename(path) };
     } else if (flag === "--preset") preset = arg;
     else if (flag === "--out") out = arg;
-    else if (flag === "--image-model" || flag === "--video-model") values[flag.slice(2).replace("-", "_")] = arg;
+    else if (["--image-model", "--video-model", "--audio-model"].includes(flag)) values[flag.slice(2).replace("-", "_")] = arg;
   }
   try {
     const options = selection(app, values);

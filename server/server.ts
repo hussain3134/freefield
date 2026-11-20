@@ -34,12 +34,13 @@ import { extname, join, normalize } from "node:path";
 import { loadRegistry, repoRoot, isFileInput, type App } from "./registry.ts";
 import { explainSubmitError, InputError, resolveValues, Runner, type Values } from "./runner.ts";
 import { History } from "./history.ts";
-import { modelChoices, selection } from "./provider-models.ts";
+import { modelChoices, selection, stageKinds, watermarkBinary } from "./provider-models.ts";
 import { ProviderRuns } from "./provider-runs.ts";
 import { Flags } from "./flags.ts";
 import { DOOR_HTML, foreign, Guard, ownerDoor, plainHttpToIp } from "./guard.ts";
 import { needOf, refusal, type Downloads } from "./models.ts";
 import { DesktopIcon } from "./desktop.ts";
+import { cleanWatermark, watermarkUploadMiB } from "./watermark.ts";
 
 const root = repoRoot();
 const { apps, problems } = loadRegistry(root);
@@ -60,9 +61,18 @@ const guard = Guard.fromEnv(join(outDir, "limits.json"));
 const maxUploadMb = Number(process.env.FREEFIELD_MAX_UPLOAD_MB || (guard.hosted ? 100 : 0));
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.FREEFIELD_HOST || "127.0.0.1";
+const tailscaleHostname = process.env.FREEFIELD_TAILSCALE_HOST?.trim().toLowerCase();
+const tailscaleIp = process.env.FREEFIELD_TAILSCALE_IP?.trim();
+if ((tailscaleHostname || tailscaleIp) && (host !== "127.0.0.1" ||
+  !/^[a-z0-9-]+\.[a-z0-9-]+\.ts\.net$/.test(tailscaleHostname ?? "") ||
+  !/^100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.(?:\d{1,3}\.)\d{1,3}$/.test(tailscaleIp ?? "") ||
+  tailscaleIp?.split(".").some(octet => Number(octet) > 255))) {
+  throw new Error("Tailscale Serve requires FREEFIELD_HOST=127.0.0.1, a .ts.net hostname, and the assigned Tailscale IPv4 address.");
+}
 const origins = {
   loopbackOnly: ["127.0.0.1", "localhost", "::1", "[::1]"].includes(host),
   allowedHosts: (process.env.FREEFIELD_ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim().toLowerCase()).filter(Boolean),
+  tailscale: tailscaleHostname && tailscaleIp ? { hostname: tailscaleHostname, ip: tailscaleIp } : undefined,
 };
 
 // the backend scales to zero 10 minutes after its last request (infra/modal_app.py scaledown_window).
@@ -75,6 +85,7 @@ let lastContact = 0;
 let waking: { since: number; error?: string } | null = null;
 const contact = () => { lastContact = Date.now(); };
 const history = new History(join(outDir, "history"), {
+  appById: id => byId.get(id),
   onContact: contact,
   appInfo: (id) => {
     const app = apps.find((a) => a.id === id);
@@ -221,12 +232,12 @@ function sendFile(req: IncomingMessage, res: ServerResponse, file: string, cache
   return createReadStream(file).pipe(res);
 }
 
-async function toRequest(req: IncomingMessage): Promise<Request> {
+async function toRequest(req: IncomingMessage, uploadMiB = maxUploadMb): Promise<Request> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += (c as Buffer).byteLength;
-    if (maxUploadMb && size > maxUploadMb * 2 ** 20) throw new InputError(`uploads are limited to ${maxUploadMb} MB here`);
+    if (uploadMiB && size > uploadMiB * 2 ** 20) throw new InputError(`uploads are limited to ${uploadMiB} MB here`);
     chunks.push(c as Buffer);
   }
   return new Request(`http://local${req.url}`, {
@@ -250,8 +261,8 @@ async function readValues(app: App, request: Request): Promise<{ values: Values;
     }
   }
   const preset = form.get("preset");
-  for (const stage of ["image", "video"]) {
-    for (const name of ["model", "aspect", "size", "quality", "duration", "resolution", "audio"]) {
+  for (const stage of stageKinds) {
+    for (const name of ["model", "aspect", "size", "quality", "duration", "resolution", "audio", "vocals", "credit_limit", "auto_watermark"]) {
       const key = stage + "_" + name;
       const value = form.get(key);
       if (typeof value === "string") values[key] = value;
@@ -338,6 +349,7 @@ function wake() {
     .catch((e) => { if (waking === started) waking = { ...started, error: (e as Error).message }; });
 }
 
+let watermarkBusy = false;
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? "/", "http://local");
@@ -363,6 +375,33 @@ const server = createServer(async (req, res) => {
     const me = visitor.id;
     if (parts[0] === "api") {
       const [, area, id, sub, arg] = parts;
+      if (area === "watermark" && !id) {
+        const bin = watermarkBinary();
+        if (req.method === "GET") return send(res, 200, { configured: Boolean(bin) });
+        if (req.method === "POST") {
+          if (!bin) return send(res, 503, { error: "Configure the WMR executable on the Freefield server." });
+          if (watermarkBusy) return send(res, 429, { error: "Wait for the current watermark export to finish." });
+          const abort = new AbortController();
+          const cancel = () => abort.abort();
+          res.once("close", cancel);
+          watermarkBusy = true;
+          try {
+            const body = await toRequest(req, watermarkUploadMiB);
+            const bytes = Buffer.from(await body.arrayBuffer());
+            const result = await cleanWatermark(bin, bytes, body.headers.get("content-type") ?? "",
+              url.searchParams.get("profile") ?? "auto", url.searchParams.get("force") === "1", abort.signal);
+            if (!result) return send(res, 422, { error: "WMR found no matching visible watermark. Check the profile." });
+            res.writeHead(200, { "content-type": result.type, "content-length": result.bytes.length, "cache-control": "no-store" });
+            return res.end(result.bytes);
+          } catch (error) {
+            if (!abort.signal.aborted) throw error;
+            return;
+          } finally {
+            res.off("close", cancel);
+            watermarkBusy = false;
+          }
+        }
+      }
       if (req.method === "GET" && area === "apps" && parts.length === 2) {
         const order = { image: 0, video: 1, audio: 2, utility: 3 } as Record<string, number>;
         const sorted = [...apps].sort((a, b) => order[a.section] - order[b.section]

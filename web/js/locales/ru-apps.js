@@ -1,5 +1,6 @@
 // Russian display text for the app catalog. Never translate workflow or option values.
 export const ruApps = {
+  "Reference image": "Референсное изображение",
   "Video Edit": "Редактирование видео",
   "Describe a change to a video with Gemini Omni Flash.": "Опишите, как изменить видео с помощью Gemini Omni Flash.",
   "Source video": "Исходное видео",

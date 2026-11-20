@@ -155,11 +155,19 @@ export class Guard {
  *    neither header and pass.
  */
 export function foreign(req: { method?: string; headers: Record<string, string | string[] | undefined> },
-  opts: { loopbackOnly: boolean; allowedHosts?: string[] }): string | null {
+  opts: { loopbackOnly: boolean; allowedHosts?: string[]; tailscale?: { hostname: string; ip: string } }): string | null {
   const one = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? "";
   const host = one(req.headers.host).toLowerCase();
   const hostname = host.startsWith("[") ? host.slice(0, host.indexOf("]") + 1) : host.split(":")[0];
-  if (opts.loopbackOnly && !LOOPBACK.has(hostname) && !(opts.allowedHosts ?? []).includes(hostname)) {
+  const forwardedHost = one(req.headers["x-forwarded-host"]).toLowerCase();
+  // Serve's TCP route preserves the browser's IP or short MagicDNS Host without adding forwarding headers.
+  const tailscaleHost = hostname === opts.tailscale?.hostname;
+  const tailscaleTcpHost = hostname === opts.tailscale?.ip || hostname === opts.tailscale?.hostname.split(".")[0];
+  if (opts.tailscale && (tailscaleHost || forwardedHost)) {
+    if (!tailscaleHost || forwardedHost !== host || one(req.headers["x-forwarded-proto"]) !== "https" ||
+      one(req.headers["tailscale-funnel-request"])) return "Open Freefield through its private Tailscale address.";
+  }
+  if (opts.loopbackOnly && !tailscaleHost && !tailscaleTcpHost && !LOOPBACK.has(hostname) && !(opts.allowedHosts ?? []).includes(hostname)) {
     return `this server only answers to localhost (Host: ${host || "none"}); add the name to FREEFIELD_ALLOWED_HOSTS to allow it`;
   }
   if (["GET", "HEAD", "OPTIONS"].includes((req.method ?? "GET").toUpperCase())) return null;

@@ -14,6 +14,7 @@ import { openCompare } from "./compare.js";
 import { flags } from "./flags.js";
 import { modelsStrip, startModels, redrawModels } from "./models.js";
 import { desktopIconCard } from "./desktop.js";
+import { watermarkView } from "./watermark.js";
 
 const main = el("main", { id: "main", class: "view" });
 let bar = null;
@@ -35,6 +36,7 @@ function route() {
   }
   if (hash.startsWith("#/apps")) return appsView();
   if (hash.startsWith("#/library")) return libraryView();
+  if (hash === "#/watermark") return watermarkView();
   if (hash.startsWith("#/vram")) return vramView(gpuState.data?.device ? gpuState.data : null);
   return exploreView();
 }
@@ -90,7 +92,7 @@ async function boot() {
   window.addEventListener("hashchange", () => render());
   render();
   if (modelsPanel) startModels();
-  if (hosted) wakeOnce();
+  if (hosted && location.hash !== "#/watermark") wakeOnce();
 }
 
 // on the hosted demo the GPU starts when someone opens the page, so it is warm by the time they press Generate

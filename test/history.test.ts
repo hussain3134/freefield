@@ -8,6 +8,7 @@ import { loadRegistry } from "../server/registry.ts";
 import { resolveValues } from "../server/runner.ts";
 import { History, Meter, pickOutputs, type JobLike } from "../server/history.ts";
 import { parseSse, type Frame } from "../server/runner.ts";
+import { stagePrompt, stages } from "../server/provider-models.ts";
 
 const { apps } = loadRegistry();
 const byId = (id: string) => apps.find((a) => a.id === id)!;
@@ -56,6 +57,61 @@ test("a run is recorded before it is submitted, with its inputs and the seed tha
     assert.deepEqual(entry.inputs.map((i) => i.file), ["input-image.png"]);
     assert.deepEqual([...readFileSync(join(dir, entry.id, "input-image.png"))], [...PNG]);
     assert.equal(history.list("edit")[0].inputs[0].url, `/api/history/${entry.id}/files/input-image.png`);
+  } finally { done(); }
+});
+
+test("AI Influencer history shows the assembled prompt for saved and older runs", () => {
+  const { dir, done } = tempHistory();
+  try {
+    const history = new History(dir, { appById: byId });
+    const influencer = byId("ai-influencer");
+    const values = resolveValues(influencer, { details: "Holding a blue umbrella" });
+    const entry = history.start(influencer, values, undefined, "owner");
+    const expected = stagePrompt(influencer, stages(influencer)[0], values);
+    assert.match(expected, /made-up character: an ordinary, believable person/);
+    assert.match(expected, /Holding a blue umbrella/);
+    assert.deepEqual(history.get(entry.id, "owner")?.generationPrompts, [{ text: expected, stage: "image" }]);
+    assert.equal(history.get(entry.id, "someone-else"), null);
+
+    delete entry.generationPrompts;
+    history.checkpoint(entry);
+    assert.deepEqual(history.list(influencer.id, 5, "owner")[0].generationPrompts, [{ text: expected, stage: "image", reconstructed: true }]);
+
+    entry.generationPrompt = "Original stored prompt";
+    history.checkpoint(entry);
+    assert.equal(history.get(entry.id, "owner")?.generationPrompts[0].text, "Original stored prompt");
+
+    const photo = byId("ai-influencer-photo");
+    const native = history.start(photo, resolveValues(photo, { image: { bytes: PNG, name: "portrait.png" } }));
+    assert.match(native.generationPrompts?.[0].text ?? "", /same person as in <ref_image_0>/);
+  } finally { done(); }
+});
+
+test("History saves workflow prompts for both Cinema stages, negative conditioning, and song lyrics", () => {
+  const { history, done } = tempHistory();
+  try {
+    const cinema = byId("cinema-video");
+    const record = history.start(cinema, resolveValues(cinema, { prompt: "A ferry leaves at dawn" }));
+    const prompts = history.get(record.id)!.generationPrompts;
+    assert.deepEqual(prompts.map(p => [p.stage, p.role, p.source]), [
+      ["image", undefined, undefined], ["video", undefined, true], ["video", "negative", undefined],
+    ]);
+    assert.match(prompts[0].text, /A ferry leaves at dawn/);
+    assert.match(prompts[1].text, /A ferry leaves at dawn/);
+    assert.match(prompts[2].text, /pc game/);
+
+    const music = byId("music");
+    const song = history.start(music, resolveValues(music, { style: "Folk duet", lyrics: "One verse\nThen another" }));
+    assert.deepEqual(history.get(song.id)?.generationPrompts, [
+      { stage: "audio", text: "Folk duet" }, { stage: "audio", role: "lyrics", text: "One verse\nThen another" },
+    ]);
+
+    const sound = byId("sfx");
+    const effect = history.start(sound, resolveValues(sound, { description: "A boot scraping on gravel" }));
+    assert.deepEqual(history.get(effect.id)?.generationPrompts, [{ stage: "audio", source: true, text: "A boot scraping on gravel" }]);
+
+    const upscale = byId("upscale");
+    assert.deepEqual(history.start(upscale, resolveValues(upscale, { image: { bytes: PNG, name: "photo.png" } })).generationPrompts, []);
   } finally { done(); }
 });
 

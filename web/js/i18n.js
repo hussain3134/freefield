@@ -4,7 +4,18 @@
 import { store } from "./util.js";
 
 const en = {
+  "view.prompt.reconstructed": "Reconstructed",
+  "view.prompt.source": "Prompt input", "view.prompt.negative": "Negative prompt", "view.prompt.lyrics": "Lyrics",
+  "nav.watermark": "Watermark", "watermark.title": "Gemini watermark remover",
+  "models.image_auto_watermark": "Auto-remove image watermark", "models.video_auto_watermark": "Auto-remove video watermark",
+  "watermark.cleaned": "Cleaned", "watermark.original": "Original",
+  "watermark.no-match": "No visible watermark found", "watermark.failed": "Watermark removal failed",
   "models.image": "Image model", "models.video": "Video model", "models.native": "ComfyUI",
+  "models.audio": "Audio model", "models.audio_vocals": "Vocals", "models.auto": "Automatic",
+  "models.instrumental": "Instrumental", "models.lyria_length": "Describe your target length in the style prompt.",
+  "models.video_credit_limit": "Max Flow credits", "models.flow_setup": "StudioWright required",
+  "models.flow_billing": "Uses your Flow or Flow Music subscription balance.",
+  "models.codex_billing": "Uses your signed-in Codex allowance. Aspect ratio is a request.",
   "models.setup": "Credentials required", "models.image_aspect": "Aspect ratio", "models.video_aspect": "Aspect ratio",
   "models.image_quality": "Quality", "models.image_size": "Image size", "models.video_duration": "Seconds",
   "models.extend_duration": "Seconds to add", "models.video_resolution": "Video resolution", "models.video_audio": "Audio",
@@ -138,7 +149,18 @@ const en = {
 };
 
 const es = {
+  "view.prompt.reconstructed": "Reconstruido",
+  "view.prompt.source": "Prompt de entrada", "view.prompt.negative": "Prompt negativo", "view.prompt.lyrics": "Letra",
+  "nav.watermark": "Marca de agua", "watermark.title": "Quitar marca de agua de Gemini",
+  "models.image_auto_watermark": "Quitar marca de agua de imagen", "models.video_auto_watermark": "Quitar marca de agua de vídeo",
+  "watermark.cleaned": "Sin marca", "watermark.original": "Original",
+  "watermark.no-match": "No se encontró una marca visible", "watermark.failed": "No se pudo quitar la marca de agua",
   "models.image": "Modelo de imagen", "models.video": "Modelo de video", "models.native": "ComfyUI",
+  "models.audio": "Modelo de audio", "models.audio_vocals": "Voces", "models.auto": "Automático",
+  "models.instrumental": "Instrumental", "models.lyria_length": "Indica la duración deseada en la descripción del estilo.",
+  "models.video_credit_limit": "Créditos máximos de Flow", "models.flow_setup": "Requiere StudioWright",
+  "models.flow_billing": "Usa el saldo de tu suscripción a Flow o Flow Music.",
+  "models.codex_billing": "Usa el límite de tu sesión de Codex. La relación de aspecto es orientativa.",
   "models.setup": "Se requieren credenciales", "models.image_aspect": "Relación de aspecto", "models.video_aspect": "Relación de aspecto",
   "models.image_quality": "Calidad", "models.image_size": "Tamaño de imagen", "models.video_duration": "Segundos",
   "models.extend_duration": "Segundos adicionales", "models.video_resolution": "Resolución de video", "models.video_audio": "Audio",
@@ -272,7 +294,18 @@ const es = {
 };
 
 const ru = {
+  "view.prompt.reconstructed": "Восстановлено",
+  "view.prompt.source": "Исходный промпт", "view.prompt.negative": "Негативный промпт", "view.prompt.lyrics": "Текст песни",
+  "nav.watermark": "Водяной знак", "watermark.title": "Удаление водяного знака Gemini",
+  "models.image_auto_watermark": "Удалять водяной знак с изображения", "models.video_auto_watermark": "Удалять водяной знак с видео",
+  "watermark.cleaned": "Очищенный", "watermark.original": "Оригинал",
+  "watermark.no-match": "Видимый водяной знак не найден", "watermark.failed": "Не удалось удалить водяной знак",
   "models.image": "Модель изображения", "models.video": "Модель видео", "models.native": "ComfyUI",
+  "models.audio": "Модель аудио", "models.audio_vocals": "Вокал", "models.auto": "Автоматически",
+  "models.instrumental": "Инструментальная музыка", "models.lyria_length": "Укажите желаемую длительность в описании стиля.",
+  "models.video_credit_limit": "Лимит кредитов Flow", "models.flow_setup": "Требуется StudioWright",
+  "models.flow_billing": "Использует баланс вашей подписки Flow или Flow Music.",
+  "models.codex_billing": "Использует лимит вашей подписки Codex. Соотношение сторон носит рекомендательный характер.",
   "models.setup": "Нужны учётные данные", "models.image_aspect": "Пропорции", "models.video_aspect": "Пропорции",
   "models.image_quality": "Качество", "models.image_size": "Размер изображения", "models.video_duration": "Секунды",
   "models.extend_duration": "Добавить секунд", "models.video_resolution": "Разрешение видео", "models.video_audio": "Звук",

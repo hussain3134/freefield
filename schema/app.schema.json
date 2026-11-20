@@ -122,6 +122,7 @@
         "help": { "type": "string" },
         "default": {},
         "required": { "type": "boolean" },
+        "provider_only": { "const": true, "description": "Input accepted by hosted models only." },
         "min": { "type": "number" },
         "max": { "type": "number" },
         "step": { "type": "number" },

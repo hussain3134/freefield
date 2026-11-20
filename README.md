@@ -398,6 +398,36 @@ the values, the seed that was used, and timings), so they survive a closed tab, 
 restart; runs still going when the server stops are picked up again. *Recreate* puts any result's inputs and settings
 back in the form.
 
+#### Use your Flow subscription with StudioWright
+
+Install [StudioWright](https://github.com/umutkocak/studiowright) and Google Chrome locally. This integration was
+written for StudioWright 0.2.13 (commit `4f260a12d0e2f85d84b6258d67678d7ff79c2dfa`).
+Run `sw auth login`, then sign into Flow in the dedicated Chrome profile. For Music, also run
+`sw auth login --url https://www.flowmusic.app/` and complete sign-in in that profile.
+
+Set `FREEFIELD_STUDIOWRIGHT_PYTHON` in `.env` to the absolute path of the Python interpreter that has StudioWright
+installed and restart Freefield. For a Windows checkout set up with `uv sync --frozen --no-dev`, the interpreter is
+`.venv\Scripts\python.exe` inside the StudioWright checkout. The local model pickers then offer Flow image and
+video models and Lyria 3.5 for Flow Music. Flow video checks the quoted price against **Max Flow credits**
+before submitting. Check your balances in Flow and Flow Music. Google can change the web interface StudioWright drives.
+
+#### Use your Codex subscription for images
+
+Sign in to the Codex CLI with ChatGPT. Set `FREEFIELD_CODEX_BIN` in `.env` to the absolute path of the native
+Codex executable (`codex.exe` on Windows), then restart the local Freefield server. The image model picker offers
+**Codex ImageGen (Subscription)** for concept images and compatible image edits. The integration was tested with
+Codex CLI 0.170.0. It uses the signed-in Codex allowance and saves results to Freefield History. Codex starts a
+temporary session for each image. Freefield keeps the prompt with the result for **Recreate**.
+
+#### Clean visible Gemini watermarks
+
+Install [froggeric's WMR](https://github.com/froggeric/gemini-watermark-and-synthid-remover/releases/tag/v1.17.1)
+and set `FREEFIELD_WMR_BIN` in `.env` to its absolute executable path. Open **Watermark** in the top bar, or choose
+**Gemini watermark remover** under **Use in…** on an image or video. Freefield processes the upload temporarily on the
+local server and returns a PNG or MP4; review the cleaned copy before downloading. WMR's encoder may drop input metadata.
+For supported Google image and video models, turn on **Auto-remove image watermark** or **Auto-remove video watermark**
+in the model settings. Freefield keeps the original in History and shows a cleaned copy first when WMR finds a match.
+
 ### A private link to the studio
 
 To let someone else use your Freefield (a reviewer, a friend) without installing anything, the same web app runs on

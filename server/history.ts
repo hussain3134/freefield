@@ -12,8 +12,9 @@ import { extname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { ComfyEvent } from "@comfyorg/sdk";
 import { isFileInput, type App } from "./registry.ts";
-import type { FileValue, Frame, Values } from "./runner.ts";
-import type { Selection } from "./provider-models.ts";
+import { InputError, type FileValue, type Frame, type Values } from "./runner.ts";
+import { stagePrompt, stages, type Selection, type Stage } from "./provider-models.ts";
+import { workflowPrompts, type GenerationPrompt } from "./generation-prompts.ts";
 import type { Media, Operation } from "./provider-api.ts";
 
 export type Status = "starting" | "queued" | "running" | "succeeded" | "failed" | "canceled" | "expired" | "lost";
@@ -33,6 +34,8 @@ export type Entry = {
   /** wall time from pressing Generate to the result, cold starts and queueing included */
   total: number | null;
   values: Record<string, unknown>;
+  generationPrompt?: string;
+  generationPrompts?: GenerationPrompt[];
   preset: string | null;
   inputs: { id: string; type: string; file: string; name: string }[];
   outputs: { file: string; type: string; name: string; node: string }[];
@@ -41,7 +44,8 @@ export type Entry = {
   owner?: string;
   pipeline?: {
     selection: Selection;
-    stages: { kind: "image" | "video"; status: "pending" | "submitting" | "completed"; operation?: Operation | { model: "native"; id: string }; usage?: Record<string, unknown> }[];
+    stages: { kind: Stage["kind"]; status: "pending" | "submitting" | "completed"; operation?: Operation | { model: "native"; id: string };
+      usage?: Record<string, unknown>; watermark?: "cleaned" | "no-match" | "failed"; prompts?: GenerationPrompt[] }[];
   };
 };
 
@@ -68,6 +72,7 @@ export type AppInfo = { outputs: string[]; nodes: number; classOf: (id: string) 
 export type HistoryOptions = {
   onContact?: () => void;
   appInfo?: (appId: string) => AppInfo | undefined;
+  appById?: (appId: string) => App | undefined;
   /** The raw event stream of a job, read without the SDK (see Meter). Absent: job.events() is used. */
   frames?: (jobId: string, signal: AbortSignal) => AsyncIterable<Frame>;
   /** A fresh handle on a job, for a second look when the backend says "expired" the moment it ends (see follow). */
@@ -220,6 +225,7 @@ export class History {
   readonly dir: string;
   private onContact: () => void;
   private appInfo: (appId: string) => AppInfo | undefined;
+  private appById?: HistoryOptions["appById"];
   private frames?: (jobId: string, signal: AbortSignal) => AsyncIterable<Frame>;
   private recheck?: (jobId: string) => Promise<JobLike>;
 
@@ -227,6 +233,7 @@ export class History {
     this.dir = dir;
     this.onContact = opts.onContact ?? (() => {});
     this.appInfo = opts.appInfo ?? (() => undefined);
+    this.appById = opts.appById;
     this.frames = opts.frames;
     this.recheck = opts.recheck;
     mkdirSync(dir, { recursive: true });
@@ -254,7 +261,7 @@ export class History {
     const entry: Entry = {
       id, app: app.id, status: "starting", job: null, created: new Date().toISOString(), started: null, finished: null,
       seconds: null, total: null, values: shown, preset: preset ?? null, inputs, outputs: [], error: null,
-      ...(owner ? { owner } : {}), ...(pipeline ? { pipeline } : {}),
+      ...(owner ? { owner } : {}), ...(pipeline ? { pipeline } : { generationPrompts: workflowPrompts(app, values, preset) }),
     };
     this.save(entry);
     this.live.set(id, { progress: null, queue: null, preview: null });
@@ -302,7 +309,7 @@ export class History {
     if (this.removed.has(entry.id)) return;
     const file = "out-" + String(entry.outputs.length + 1).padStart(2, "0") + safeExt(media.name, media.type);
     writeFileSync(join(this.dir, entry.id, file), media.bytes);
-    entry.outputs.push({ file, type: media.type.startsWith("video/") ? "video" : "image", name: media.name, node });
+    entry.outputs.push({ file, type: mediaKind(extname(file), media.type.split("/")[0]), name: media.name, node });
   }
 
   readForRun(id: string, owner?: string) { return this.read(id, owner); }
@@ -536,14 +543,50 @@ export class History {
     return e ? this.view(e) : null;
   }
 
+  private prompts(e: Entry): GenerationPrompt[] {
+    if (e.generationPrompts) return e.generationPrompts;
+    const saved = e.pipeline?.stages;
+    if (saved?.every(stage => stage.prompts)) return saved.flatMap(stage => stage.prompts!);
+    const app = this.appById?.(e.app);
+    if (!saved) {
+      if (e.generationPrompt) return [{ text: e.generationPrompt, stage: app?.outputs[0]?.type ?? "image" }];
+      return app ? workflowPrompts(app, e.values, e.preset ?? undefined).map(prompt => ({ ...prompt, reconstructed: true })) : [];
+    }
+    return saved.flatMap((progress): GenerationPrompt[] => {
+      if (progress.prompts) return progress.prompts;
+      const kind = progress.kind;
+      if (e.generationPrompt && kind === "image") return [{ text: e.generationPrompt, stage: kind }];
+      if (!app || progress.status === "pending") return [];
+      if (!e.pipeline!.selection[kind + "_model"]) {
+        const graph = app.graph && Object.fromEntries(Object.entries(app.graph).filter(([id]) => id.startsWith("still:") === (kind === "image")));
+        return workflowPrompts(app, e.values, e.preset ?? undefined, kind, graph).map(prompt => ({ ...prompt, reconstructed: true }));
+      }
+      const stage = stages(app).find(s => s.kind === kind);
+      if (!stage) return [];
+      try {
+        const text = stagePrompt(app, stage, e.values, e.preset ?? undefined);
+        const lyrics = kind === "audio" && typeof e.values.lyrics === "string" ? e.values.lyrics.trim() : "";
+        return [
+          ...(text ? [{ text, stage: kind, reconstructed: true as const }] : []),
+          ...(lyrics ? [{ text: lyrics, stage: kind, role: "lyrics" as const, reconstructed: true as const }] : []),
+        ];
+      } catch (error) {
+        if (error instanceof InputError) return [];
+        throw error;
+      }
+    });
+  }
+
   /** What the UI gets: the record plus URLs and live progress. */
   view(e: Entry) {
     const base = `/api/history/${e.id}`;
     const live = this.live.get(e.id);
     const { owner: _owner, pipeline, ...shown } = e;
+    const generationPrompts = this.prompts(e);
     return {
       ...shown,
-      ...(pipeline ? { pipeline: { selection: pipeline.selection, stages: pipeline.stages.map(({ kind, status, usage }) => ({ kind, status, usage })) } } : {}),
+      generationPrompts,
+      ...(pipeline ? { pipeline: { selection: pipeline.selection, stages: pipeline.stages.map(({ kind, status, usage, watermark }) => ({ kind, status, usage, watermark })) } } : {}),
       inputs: e.inputs.map((i) => ({ ...i, url: `${base}/files/${i.file}` })),
       outputs: e.outputs.map((o) => ({ ...o, url: `${base}/files/${o.file}` })),
       progress: live?.progress ?? null,
